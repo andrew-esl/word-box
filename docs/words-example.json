@@ -1,0 +1,40 @@
+[
+  {
+    "term": "get by",
+    "uk": "давати раду, обходитися",
+    "def": "to manage to live or do something with difficulty, using what you have",
+    "ex": "We can [get by] on one salary if we cut our expenses.",
+    "syn": ["cope", "manage"],
+    "pos": "phrasal verb",
+    "src": "Work & Money",
+    "context_quiz": ["get by", "get over", "get along", "get away"],
+    "context_translation": "Ми можемо обійтися однією зарплатою, якщо скоротимо витрати."
+  },
+  {
+    "term": "reliable",
+    "uk": "надійний",
+    "def": "able to be trusted to do what you expect",
+    "ex": "He is a [reliable] colleague.",
+    "syn": ["dependable", "trustworthy"],
+    "pos": "adjective",
+    "src": "Work & Money"
+  },
+  {
+    "term": "go",
+    "uk": "йти, їхати",
+    "def": "to move or travel from one place to another",
+    "ex": "",
+    "syn": [],
+    "pos": "verb",
+    "src": "Motion",
+    "conj": {
+      "tenses": {
+        "present_simple":  ["I go", "you go", "he/she/it goes", "we go", "you go", "they go"],
+        "past_simple":     ["I went", "you went", "he/she/it went", "we went", "you went", "they went"],
+        "present_perfect": ["I have gone", "you have gone", "he/she/it has gone", "we have gone", "you have gone", "they have gone"],
+        "future_simple":   ["I will go", "you will go", "he/she/it will go", "we will go", "you will go", "they will go"],
+        "conditional":     ["I would go", "you would go", "he/she/it would go", "we would go", "you would go", "they would go"]
+      }
+    }
+  }
+]
