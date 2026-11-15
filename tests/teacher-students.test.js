@@ -151,3 +151,46 @@ test('Панель викладача не показує нижню навіг�
   assert.match(panel, /data-tt="students"/);
   assert.match(panel, /data-tt="add"/);
 });
+
+// ───────────── Зміна імені учня з його картки ─────────────
+
+test('Перейменування зберігає нове ім\'я в базі й у панелі', async () => {
+  const app = await teacher();
+  await settle();
+  const res = await app.fn('teacherRenameStudent')('olena@x.com', '  Olena   Koval ');
+  assert.equal(res.ok, true);
+  assert.equal(res.name, 'Olena Koval', 'зайві пробіли прибираються');
+  assert.equal(app.fn('studentLabel')('olena@x.com'), 'Olena Koval');
+  const rows = app.db.tables.student_profiles.filter(r => r.user_email === 'olena@x.com');
+  assert.equal(rows.length, 1, 'ім\'я оновлюється, а не дублюється');
+  assert.equal(rows[0].name, 'Olena Koval');
+});
+
+test('Перейменування учня без імені створює запис, чуже ім\'я не чіпає', async () => {
+  const app = await teacher();
+  await settle();
+  const res = await app.fn('teacherRenameStudent')('taras@x.com', 'Taras');
+  assert.equal(res.ok, true);
+  assert.equal(app.fn('studentLabel')('taras@x.com'), 'Taras');
+  assert.equal(app.fn('studentLabel')('olena@x.com'), 'Олена Коваль');
+});
+
+test('Порожнє ім\'я й збій бази лишають старе ім\'я', async () => {
+  const app = await teacher();
+  await settle();
+  const empty = await app.fn('teacherRenameStudent')('olena@x.com', '   ');
+  assert.equal(empty.ok, false);
+  assert.equal(app.fn('studentLabel')('olena@x.com'), 'Олена Коваль');
+  app.db.networkDown = true;
+  const down = await app.fn('teacherRenameStudent')('olena@x.com', 'Olena');
+  assert.equal(down.ok, false);
+  assert.equal(app.fn('studentLabel')('olena@x.com'), 'Олена Коваль', 'без підтвердження бази ім\'я в панелі не змінюється');
+});
+
+test('У картці учня є кнопка зміни імені з Enter, Escape і скасуванням', () => {
+  assert.match(HTML, /id="btnTNameEdit"[^>]*aria-label="Змінити ім'я"/);
+  assert.match(HTML, /id="tNameInput"/);
+  assert.match(HTML, /e\.key === 'Enter'/);
+  assert.match(HTML, /e\.key === 'Escape'/);
+  assert.match(HTML, /id="btnTNameCancel"/);
+});

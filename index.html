@@ -898,6 +898,13 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     }
     return { ok: true, name };
   }
+  /* Перейменування з картки учня: зберігає в базі й, лише якщо база підтвердила, оновлює ім'я в панелі.
+     Помилка лишає старе ім'я на місці. */
+  async function teacherRenameStudent(email, rawName) {
+    const res = await saveStudentName(email, rawName);
+    if (res.ok) teacher.names[email] = res.name;
+    return res;
+  }
   async function saveStudentNameFromPanel() {
     const email = document.getElementById('target-student-email').value.trim().toLowerCase();
     const nameRaw = document.getElementById('target-student-name').value;
@@ -912,7 +919,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    * Читаємо всі картки одним запитом і рахуємо на місці — учнів десятки,
    * а не тисячі, тож окремі запити на кожного були б зайвим навантаженням.
    * ========================================================= */
-  const teacher = { tab: 'students', rows: [], names: {}, days: {}, openEmail: null, query: '', topic: 'all', loaded: false, error: '',
+  const teacher = { tab: 'students', rows: [], names: {}, days: {}, openEmail: null, nameEdit: null, query: '', topic: 'all', loaded: false, error: '',
     addOpen: false, addTopic: '', addMsg: '', addBusy: false, addUpdate: false, bareOnly: false };
 
   function teacherView() { return document.getElementById('teacherView'); }
@@ -1023,7 +1030,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
           ${st.last && (Date.now() - st.last) > 7 * DAY_MS ? '<div class="student-quiet">Не займався понад тиждень</div>' : ''}
         </div>`).join('')}
     `;
-    const open = email => { teacher.openEmail = email; teacher.query = ''; teacher.topic = 'all'; teacher.addOpen = false; teacher.addMsg = ''; teacher.bareOnly = false; renderTeacherPanel(); };
+    const open = email => { teacher.nameEdit = null; teacher.openEmail = email; teacher.query = ''; teacher.topic = 'all'; teacher.addOpen = false; teacher.addMsg = ''; teacher.bareOnly = false; renderTeacherPanel(); };
     view.querySelectorAll('[data-student]').forEach(b => {
       // Картка — не <button>: інакше на iPhone з неї не виділити пошту.
       // Якщо викладач щось виділяє, це не «відкрити учня».
@@ -1053,10 +1060,15 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
       <button type="button" class="btn btn-sm" id="btnBackStudents" style="margin-bottom:14px;">← До списку</button>
       <section class="study-card" style="margin-bottom:16px;">
         <div class="card-head">
-          <div class="copy-line">
+          ${teacher.nameEdit === email ? `<div style="display:flex; gap:8px; align-items:center; flex:1; min-width:0; margin-right:10px;">
+            <input type="text" id="tNameInput" class="input" maxlength="60" autocomplete="off" placeholder="Ім'я учня" aria-label="Ім'я учня" value="${escapeHtml(teacher.names[email] || '')}" style="margin-bottom:0; flex:1; min-width:0;">
+            <button type="button" class="btn btn-primary btn-sm" id="btnTNameSave">Зберегти</button>
+            <button type="button" class="btn btn-sm" id="btnTNameCancel">Скасувати</button>
+          </div>` : `<div class="copy-line">
             <h2 class="card-title copy-text">${escapeHtml(studentLabel(email))}</h2>
             ${teacher.names[email] ? `<button type="button" class="copy-btn" data-copy="name" aria-label="Копіювати ім'я" title="Копіювати ім'я">${icon('copy')}</button>` : ''}
-          </div>
+            <button type="button" class="copy-btn" id="btnTNameEdit" aria-label="Змінити ім'я" title="Змінити ім'я">${icon('pencil')}</button>
+          </div>`}
           <span class="pill-badge">${st.total} ${ukPlural(st.total, 'слово', 'слова', 'слів')}</span>
         </div>
         <div class="copy-line" style="margin:-6px 0 14px;">
@@ -1136,7 +1148,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
           </div>
         </div>`).join('')}
     `;
-    view.querySelector('#btnBackStudents').addEventListener('click', () => { teacher.openEmail = null; renderTeacherPanel(); });
+    view.querySelector('#btnBackStudents').addEventListener('click', () => { teacher.nameEdit = null; teacher.openEmail = null; renderTeacherPanel(); });
     const search = view.querySelector('#tSearch');
     search.addEventListener('input', e => {
       teacher.query = e.target.value;
@@ -1147,6 +1159,29 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     const bareBtn = view.querySelector('#btnTBare');
     if (bareBtn) bareBtn.addEventListener('click', () => { teacher.bareOnly = !teacher.bareOnly; renderTeacherPanel(); });
     view.querySelector('#tTopic').addEventListener('change', e => { teacher.topic = e.target.value; renderTeacherPanel(); });
+    if (teacher.nameEdit !== email) {
+      view.querySelector('#btnTNameEdit').addEventListener('click', () => { teacher.nameEdit = email; renderTeacherPanel(); });
+    } else {
+      const nameInput = view.querySelector('#tNameInput');
+      nameInput.focus();
+      nameInput.select();
+      const cancel = () => { teacher.nameEdit = null; renderTeacherPanel(); };
+      const save = async () => {
+        const btn = view.querySelector('#btnTNameSave');
+        if (btn) btn.disabled = true;
+        const res = await teacherRenameStudent(email, nameInput.value);
+        if (!res.ok) { if (btn) btn.disabled = false; alert(`⚠️ Не вдалося зберегти ім'я: ${res.message}`); return; }
+        teacher.nameEdit = null;
+        renderTeacherPanel();
+        showToast(`Ім'я збережено: ${res.name}`);
+      };
+      view.querySelector('#btnTNameSave').addEventListener('click', save);
+      view.querySelector('#btnTNameCancel').addEventListener('click', cancel);
+      nameInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        else if (e.key === 'Escape') cancel();
+      });
+    }
     view.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => {
       if (b.dataset.copy === 'email') copyText(email, 'Пошту скопійовано');
       else copyText(teacher.names[email] || '', "Ім'я скопійовано");
@@ -2231,7 +2266,8 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     cross:      '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
     arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
     copy:       '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
-    plus:       '<path d="M5 12h14"/><path d="M12 5v14"/>'
+    plus:       '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    pencil:     '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>'
   };
   function icon(name, cls) {
     const body = ICONS[name] || '';
