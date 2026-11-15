@@ -113,7 +113,7 @@ test('Підсвічування: HTML у слові екранується', as
 // ───────────── Режими справді використовують нову оцінку ─────────────
 test('«Напиши» і «Диктант» зараховують відповідь через isWrittenAnswerCorrect', () => {
   assert.equal(/chk === 'ok' \|\| chk === 'almost'/.test(HTML), false, 'повернулось зарахування «майже» як правильного');
-  assert.equal((HTML.match(/const ok = isWrittenAnswerCorrect\(chk\);/g) || []).length, 2, 'мають бути обидва режими');
+  assert.equal((HTML.match(/const ok = isWrittenAnswerCorrect\(chk\);/g) || []).length, 3, 'мають бути «Напиши», «Диктант» і «Словотвір»');
 });
 
 test('Стилю «майже» більше немає: він підказував, що відповідь напівзарахована', () => {
