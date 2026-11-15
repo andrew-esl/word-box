@@ -17,7 +17,23 @@
     "ex": "He is a [reliable] colleague.",
     "syn": ["dependable", "trustworthy"],
     "pos": "adjective",
-    "src": "Work & Money"
+    "src": "Work & Money",
+    "wf": {
+      "base": "rely",
+      "ex": "You can't call him [reliable] if he is late every day.",
+      "pos": "adjective",
+      "family": ["rely", "reliable", "reliability", "unreliable"]
+    }
+  },
+  {
+    "term": "decision",
+    "uk": "рішення",
+    "def": "a choice you make after thinking about the options",
+    "ex": "It was a hard [decision] to leave the team.",
+    "syn": ["choice"],
+    "pos": "noun",
+    "src": "Work & Money",
+    "coll": ["make a [decision]", "reach a [decision]", "a difficult [decision]"]
   },
   {
     "term": "go",

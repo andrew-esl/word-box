@@ -118,7 +118,7 @@ test('Українська множина рахується правильно'
 
 test('Описи режимів однорядкові й без англійської', async () => {
   const app = await loadApp();
-  assert.equal(app.api.MODES_META.length, 10);
+  assert.equal(app.api.MODES_META.length, 12);
   for (const m of app.api.MODES_META) {
     assert.ok(m.desc.length <= 24, `«${m.name}»: опис «${m.desc}» задовгий для плитки`);
     assert.ok(!/[A-Za-z]/.test(m.name + m.desc), `«${m.name}»: латиниця в інтерфейсі`);

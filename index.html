@@ -667,6 +667,9 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    * 17. Письмова відповідь зараховується ЛИШЕ при точному написанні
    *     (isWrittenAnswerCorrect). Помилка в написанні — помилка, навіть одна літера.
    *     Регістр лишається пробачним: телефони автоматично ставлять велику літеру.
+   * 23. Колокації (coll) і словотвір (wf) лежать у conj, окремих стовпців немає, SQL не потрібен.
+   *     Режими «Колокації» і «Словотвір» беруть лише картки, де ці поля є; решта карток їх не торкається.
+   *     Збагачення не стирає наявні coll / wf порожнім значенням.
    * Перед змінами: npm test
    * ===================================================================== */
   // 1. ІНІЦІАЛІЗАЦІЯ SUPABASE ТА ЗМІННИХ СТАНУ
@@ -693,7 +696,40 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
   });
   let state = defaultState();
 
-  // Нормалізація рядка (підтримка старих та нових полів JSON: context_quiz, context_translation, conj)
+  /* Колокації (coll) і словотвір (wf) лежать у conj поруч із context_quiz: окремих стовпців у базі немає,
+     тож SQL міняти не треба, а наявні картки й прогрес лишаються як були.
+     coll: ["make a [decision]", ...] — слово картки у [дужках], поруч його партнер.
+     wf: { base: "satisfy", ex: "Customers were [dissatisfied] with it.", pos, alt: [], family: [] } —
+     у [дужках] форма слова картки, base — слово-основа, яке бачить учень. */
+  function collBlankKey(phrase) { return String(phrase).replace(/\[[^\[\]]+\]/, '___').replace(/\s+/g, ' ').trim().toLowerCase(); }
+  function cleanColl(v) {
+    if (!Array.isArray(v)) return [];
+    const seen = new Set();
+    return v.map(x => String(x == null ? '' : x).trim()).filter(x => {
+      const m = x.match(/\[([^\[\]]+)\]/);
+      if (!m || !m[1].trim()) return false;
+      if (!x.replace(/\[[^\[\]]+\]/, '').trim()) return false; // без партнера це не колокація
+      const k = collBlankKey(x);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).slice(0, 6);
+  }
+  function cleanWf(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const ex = String(v.ex || '').trim();
+    const m = ex.match(/\[([^\[\]]+)\]/);
+    const base = String(v.base || '').trim();
+    if (!m || !m[1].trim() || !base) return null;
+    const list = a => (Array.isArray(a) ? a : []).map(x => String(x == null ? '' : x).trim()).filter(Boolean);
+    return { base, ex, pos: String(v.pos || '').trim(), alt: list(v.alt).slice(0, 4), family: list(v.family).slice(0, 8) };
+  }
+  function wfAnswers(wf) {
+    const m = String(wf.ex).match(/\[([^\[\]]+)\]/);
+    return [m[1].trim(), ...(wf.alt || [])];
+  }
+
+  // Нормалізація рядка (підтримка старих та нових полів JSON: context_quiz, context_translation, conj, coll, wf)
   function normalizeWordRow(row) {
     let rawConj = row.conj || row.conjugation || null;
     let ctxQuiz = row.context_quiz || null;
@@ -719,6 +755,8 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
       context_translation: ctxTrans,
       syn: Array.isArray(row.syn) ? row.syn : (Array.isArray(row.synonyms) ? row.synonyms : []),
       conj: hasValidTenses ? rawConj : null,
+      coll: cleanColl((rawConj && typeof rawConj === 'object' && rawConj.coll) || row.coll),
+      wf: cleanWf((rawConj && typeof rawConj === 'object' && rawConj.wf) || row.wf),
       context_quiz: ctxQuiz,
       pos: String(row.pos || '').trim(),
       src: String(row.src || 'Загальний').trim(),
@@ -849,10 +887,13 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     const owner = String(email || '').trim().toLowerCase();
     const recordsToInsert = wordsArray.map(w => {
       let conjPayload = w.conj || w.conjugation || null;
-      if (w.context_quiz || w.context_translation) {
+      const collIn = cleanColl(w.coll), wfIn = cleanWf(w.wf);
+      if (w.context_quiz || w.context_translation || collIn.length || wfIn) {
         conjPayload = Object.assign({}, conjPayload || {});
         if (w.context_quiz) conjPayload.context_quiz = w.context_quiz;
         if (w.context_translation) conjPayload.context_translation = w.context_translation;
+        if (collIn.length) conjPayload.coll = collIn;
+        if (wfIn) conjPayload.wf = wfIn;
       }
       return {
         user_email: owner,
@@ -1245,9 +1286,14 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     const base = Object.assign({}, existing.conj || {});
     if (existing.context_quiz) base.context_quiz = existing.context_quiz;
     if (existing.context_translation) base.context_translation = existing.context_translation;
+    if (existing.coll && existing.coll.length) base.coll = existing.coll;
+    if (existing.wf) base.wf = existing.wf;
     const merged = Object.assign(base, (inConj && typeof inConj === 'object') ? inConj : {});
     if (incoming.context_quiz) merged.context_quiz = incoming.context_quiz;
     if (incoming.context_translation) merged.context_translation = text(incoming.context_translation);
+    const inColl = cleanColl(incoming.coll), inWf = cleanWf(incoming.wf);
+    if (inColl.length) merged.coll = inColl;
+    if (inWf) merged.wf = inWf;
     if (Object.keys(merged).length) patch.conj = merged;
     return patch;
   }
@@ -2267,6 +2313,8 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
     copy:       '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
     plus:       '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    collocations: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    wordform:   '<path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/>',
     pencil:     '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>'
   };
   function icon(name, cls) {
@@ -2350,7 +2398,9 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     { id: 'pairs', name: 'Пари', desc: 'З’єднання перекладів' },
     { id: 'blitz', name: 'Бліц', desc: 'Швидкісна відповідь' },
     { id: 'crossword', name: 'Кросворд', desc: 'Сітка зі словника' },
-    { id: 'anagram', name: 'Анаграма', desc: 'Складання з літер' }
+    { id: 'anagram', name: 'Анаграма', desc: 'Складання з літер' },
+    { id: 'collocations', name: 'Колокації', desc: 'Слово та його партнери' },
+    { id: 'wordform', name: 'Словотвір', desc: 'Потрібна форма слова' }
   ];
 
   let currentTab = 'study';
@@ -2785,6 +2835,8 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     else if (modeId === 'pairs') runPairsMode(main, restoredState);
     else if (modeId === 'crossword') runCrosswordMode(main, restoredState);
     else if (modeId === 'anagram') runAnagramMode(main, restoredState);
+    else if (modeId === 'collocations') runCollocationsMode(main, restoredState);
+    else if (modeId === 'wordform') runWordFormMode(main, restoredState);
   }
 
   /* Два рядки наприкінці сесії: зроблене сьогодні помітно одразу, а не лише
@@ -3725,6 +3777,206 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
       }
     }
     setup();
+  }
+
+  /* =========================================================
+   * РЕЖИМ КОЛОКАЦІЇ
+   * З'єднати слово з його «партнером»: make a ___ ↔ decision.
+   * Беруться лише слова, у яких є coll. Фраза кожного слова в раунді не підходить
+   * жодному іншому слову раунду, інакше правильну відповідь було б не відрізнити.
+   * ========================================================= */
+  function buildCollRounds(words, maxRounds) {
+    const keysOf = w => new Set(w.coll.map(collBlankKey));
+    const rounds = [];
+    let rest = words.filter(w => w.coll && w.coll.length);
+    while (rounds.length < maxRounds) {
+      const round = [];
+      const left = [];
+      for (const w of rest) {
+        if (round.length >= 5) { left.push(w); continue; }
+        const mine = keysOf(w);
+        const phrase = shuffle(w.coll).find(ph => {
+          const k = collBlankKey(ph);
+          return round.every(it => !keysOf(it.word).has(k) && !mine.has(collBlankKey(it.phrase)));
+        });
+        if (phrase) round.push({ word: w, phrase }); else left.push(w);
+      }
+      if (round.length < 5) break;
+      rounds.push(round);
+      rest = left;
+    }
+    return rounds;
+  }
+
+  function runCollocationsMode(container) {
+    const pool = pickStudyWords(roundSize() * 3, w => w.coll && w.coll.length > 0);
+    const rounds = buildCollRounds(pool, Math.max(1, Math.floor(roundSize() / 5)));
+    if (rounds.length < 1) {
+      showToast('Мало слів із колокаціями: потрібно мінімум 5');
+      exitToDashboard();
+      return;
+    }
+    let rIdx = 0, t = 0, L = [], R = [], mat = new Set(), sL = null, sR = null;
+    const res = [], missed = new Set();
+    const iv = setInterval(() => { t++; const el = document.getElementById('cT'); if (el) el.innerText = t; }, 1000);
+    activeSessionCleanup = () => clearInterval(iv);
+    const blank = ph => escapeHtml(ph).replace(/\[.+?\]/, '<span class="hl-word">…</span>');
+
+    function setup() {
+      const b = rounds[rIdx];
+      L = shuffle(b.slice()); R = shuffle(b.slice()); mat = new Set(); sL = null; sR = null;
+      render();
+    }
+    function render() {
+      container.innerHTML = `
+      <div class="session-header">
+        <button class="btn btn-sm" id="bEx">← До режимів</button>
+        <span class="session-progress">Колокації · Раунд ${rIdx + 1} / ${rounds.length} · <span id="cT">${t}</span> с</span>
+      </div>
+      <section class="study-card">
+        <div class="instruction-text">З'єднайте слово з виразом, у якому воно живе:</div>
+        <div class="pairs-columns">
+          <div style="display:flex;flex-direction:column;gap:8px;">${L.map(it => `<button type="button" class="pair-btn pair-left ${mat.has(it.word.id) ? 'matched' : ''} ${sL === it.word.id ? 'selected' : ''}" data-l="${it.word.id}">${escapeHtml(it.word.term)}</button>`).join('')}</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">${R.map(it => `<button type="button" class="pair-btn pair-right ${mat.has(it.word.id) ? 'matched' : ''} ${sR === it.word.id ? 'selected' : ''}" data-r="${it.word.id}">${mat.has(it.word.id) ? highlightBracketExample(it.phrase) : blank(it.phrase)}</button>`).join('')}</div>
+        </div>
+      </section>`;
+      container.querySelector('#bEx').addEventListener('click', exitToDashboard);
+      container.querySelectorAll('[data-l]').forEach(b => b.addEventListener('click', () => { if (!mat.has(b.dataset.l)) { sL = b.dataset.l; chk(); } }));
+      container.querySelectorAll('[data-r]').forEach(b => b.addEventListener('click', () => { if (!mat.has(b.dataset.r)) { sR = b.dataset.r; chk(); } }));
+    }
+    function chk() {
+      if (!sL || !sR) { render(); return; }
+      const it = rounds[rIdx].find(x => x.word.id === sL);
+      if (sL === sR) {
+        mat.add(sL);
+        // Слово, на якому вже помилились у цьому раунді, вдруге не рахуємо
+        if (it && !missed.has(sL)) { handleMiniGameResult(it.word, true); res.push({ word: it.word, ok: true }); }
+        sL = null; sR = null;
+        if (mat.size === rounds[rIdx].length) {
+          rIdx++;
+          if (rIdx >= rounds.length) { clearInterval(iv); renderRoundSummary(container, 'collocations', res); }
+          else setup();
+        } else render();
+      } else {
+        if (it && !missed.has(sL)) { missed.add(sL); handleMiniGameResult(it.word, false); res.push({ word: it.word, ok: false }); }
+        sL = null; sR = null;
+        showToast('Не збігається');
+        render();
+      }
+    }
+    setup();
+  }
+
+  /* =========================================================
+   * РЕЖИМ СЛОВОТВІР
+   * Речення з пропуском і слово-основа з великих літер: SATISFY → dissatisfied.
+   * Відповідь — завжди форма слова картки, тому оцінка йде в повторення цього слова.
+   * ========================================================= */
+  function runWordFormMode(container, restored = null) {
+    let qs = [];
+    let idx = 0;
+    let chk = null;
+    let last = '';
+    const res = [];
+
+    if (restored && Array.isArray(restored.wordIds)) {
+      qs = restored.wordIds.map(id => state.words.find(w => w.id === id)).filter(w => w && w.wf);
+      idx = restored.idx || 0;
+      last = restored.last || '';
+      if (Array.isArray(restored.results)) {
+        restored.results.forEach(r => {
+          const w = state.words.find(x => x.id === r.id);
+          if (w) res.push({ word: w, ok: r.ok });
+        });
+      }
+    } else {
+      qs = pickStudyWords(roundSize(), w => Boolean(w.wf));
+    }
+    if (qs.length === 0 || idx >= qs.length) {
+      if (!restored) showToast('Мало слів зі словотвором (wf)');
+      exitToDashboard();
+      return;
+    }
+
+    function syncSession() {
+      activeRoundState = { mode: 'wordform', wordIds: qs.map(w => w.id), idx, last, results: res.map(r => ({ id: r.word.id, ok: r.ok })) };
+      saveActiveSessionProgress();
+    }
+    function verdictFor(v, wf) {
+      const all = wfAnswers(wf).map(a => evaluateWrittenAnswer(v, a));
+      return all.find(x => x === 'ok') || all.find(x => x !== 'err') || 'err';
+    }
+
+    function render() {
+      syncSession();
+      const w = qs[idx];
+      const wf = w.wf;
+      const shown = escapeHtml(wf.ex).replace(/\[.+?\]/, '<span class="hl-word">______</span>');
+      const meta = chk ? writtenVerdictMeta(chk) : null;
+      container.innerHTML = `
+      <div class="session-header">
+        <button class="btn btn-sm" id="bEx">← До режимів</button>
+        <span class="session-progress">Словотвір · ${idx + 1} / ${qs.length}</span>
+      </div>
+      <section class="study-card">
+        <div class="instruction-text">Утворіть потрібну форму слова з великих літер:</div>
+        <div class="study-example"><div>${chk ? highlightBracketExample(wf.ex) : shown} <strong style="font-family:var(--font-mono); letter-spacing:.04em;">${escapeHtml(wf.base.toUpperCase())}</strong></div>${chk ? speakerBtnHtml(wf.ex, 'Озвучити речення') : ''}</div>
+        ${wf.pos && !chk ? `<div class="study-pos">${escapeHtml(wf.pos)}</div>` : ''}
+        <input type="text" id="inpW" class="input" placeholder="Введіть слово…" value="${escapeHtml(last)}" autocomplete="off" spellcheck="false" ${chk ? 'disabled' : ''}>
+        ${!chk ? `<div style="display:flex;gap:10px;flex-wrap:wrap;"><button type="button" class="btn btn-primary" id="bCh">Перевірити</button><button type="button" class="btn" id="bSkip">Не знаю</button></div>`
+          : `<div class="feedback-box ${meta.cls}"><div>${meta.title}</div><div style="font-family:var(--font-word);font-weight:700;font-size:1.25rem;margin-top:2px;">${escapeHtml(wfAnswers(wf)[0])}</div>
+            <div style="font-size:var(--fs-small); margin-top:6px;">${escapeHtml(getPromptText(w))}</div>
+            ${wf.family.length ? `<div style="font-size:var(--fs-small); color:var(--text-muted); margin-top:4px;">Родина слова: ${escapeHtml(wf.family.join(' · '))}</div>` : ''}</div>
+            <div class="next-row"><button type="button" class="btn btn-primary" id="bNx">Далі ${icon('arrowRight')}</button></div>`}
+      </section>`;
+      container.querySelector('#bEx').addEventListener('click', exitToDashboard);
+      const inp = container.querySelector('#inpW');
+      if (inp && !chk) {
+        inp.focus();
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+        inp.addEventListener('input', () => { last = inp.value; saveActiveSessionProgress(); });
+        inp.addEventListener('keydown', e => {
+          if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); check(inp.value); }
+        });
+        container.querySelector('#bCh').addEventListener('click', () => check(inp.value));
+        container.querySelector('#bSkip').addEventListener('click', skip);
+      } else if (chk) {
+        const nx = container.querySelector('#bNx');
+        if (nx) { nx.focus(); nx.addEventListener('click', next); }
+      }
+    }
+    function check(v) {
+      if (chk) return;
+      last = v;
+      const w = qs[idx];
+      chk = verdictFor(v, w.wf);
+      const ok = isWrittenAnswerCorrect(chk);
+      handleMiniGameResult(w, ok);
+      res.push({ word: w, ok });
+      render();
+    }
+    function skip() {
+      if (chk) return;
+      last = '';
+      const w = qs[idx];
+      chk = 'skip';
+      handleMiniGameResult(w, false);
+      res.push({ word: w, ok: false });
+      render();
+    }
+    function next() {
+      idx++;
+      chk = null;
+      last = '';
+      if (idx >= qs.length) renderRoundSummary(container, 'wordform', res);
+      else render();
+    }
+    function onK(e) {
+      if (chk && e.key === 'Enter') { e.preventDefault(); next(); }
+    }
+    window.addEventListener('keydown', onK);
+    activeSessionCleanup = () => window.removeEventListener('keydown', onK);
+    render();
   }
 
   /* =========================================================
