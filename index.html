@@ -670,6 +670,9 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    * 23. Колокації (coll) і словотвір (wf) лежать у conj, окремих стовпців немає, SQL не потрібен.
    *     Режими «Колокації» і «Словотвір» беруть лише картки, де ці поля є; решта карток їх не торкається.
    *     Збагачення не стирає наявні coll / wf порожнім значенням.
+   * 24. Неправильні дієслова — окремий тренажер для всіх учнів: 200 дієслів вшито в застосунок (IRREG), хмара лише для прогресу.
+   *     Прогрес — коробки Лейтнера 0..5 у таблиці irregular_progress (SQL 005). Розклад слів, їхня статистика й серія не змінюються.
+   *     Немає таблиці — тренажер працює, прогрес лишається на пристрої (у консолі лише попередження).
    * Перед змінами: npm test
    * ===================================================================== */
   // 1. ІНІЦІАЛІЗАЦІЯ SUPABASE ТА ЗМІННИХ СТАНУ
@@ -787,6 +790,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
           await flushPendingProgress(); // догнати те, що не встигло зберегтись минулого разу
           await loadStudentProfile();
           await loadStudyDays();
+          await loadIrregular();
           await loadStudentWords();
         }
       } else {
@@ -1612,11 +1616,12 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
       saveActiveSessionProgress();
       saveLocalStats();
       flushStudyDay();
+      flushIrregular();
     } else if (document.visibilityState === 'visible') {
       flushPendingProgress(); // учень повернувся: пробуємо догнати незбережене
     }
   });
-  window.addEventListener('online', () => { flushPendingProgress(); flushStudyDay(); });
+  window.addEventListener('online', () => { flushPendingProgress(); flushStudyDay(); flushIrregular(); });
   window.addEventListener('pagehide', () => {
     saveActiveSessionProgress();
     saveLocalStats();
@@ -2811,6 +2816,13 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
           ${MODES_META.map(m => `<button type="button" class="mode-tile" data-mode="${m.id}"><div class="mode-icon-box">${icon(m.id)}</div><div><div class="mode-title">${m.name}</div><div class="mode-desc">${m.desc}</div></div></button>`).join('')}
         </div>
       </section>
+
+      <section>
+        <div class="card-head"><h2 class="card-title">Окремі тренажери</h2></div>
+        <div class="modes-grid">
+          <button type="button" class="mode-tile" data-mode="irregular"><div class="mode-icon-box">${icon('collocations')}</div><div><div class="mode-title">Неправильні дієслова</div><div class="mode-desc">${IRREG.verbs.length} дієслів, три форми</div></div></button>
+        </div>
+      </section>
     `;
     container.querySelector('#selDashboardTopic').addEventListener('change', e => {
       state.settings.focusTopic = e.target.value;
@@ -2825,7 +2837,8 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     cleanupSession();
     const main = document.getElementById('mainView');
     if (!main) return;
-    if (modeId === 'cards') runCardsMode(main, restoredState);
+    if (modeId === 'irregular') runIrregularHub(main);
+    else if (modeId === 'cards') runCardsMode(main, restoredState);
     else if (modeId === 'blitz') runBlitzMode(main, restoredState);
     else if (modeId === 'choice') runChoiceMode(main, restoredState);
     else if (modeId === 'write') runWriteMode(main, restoredState);
@@ -3976,6 +3989,333 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     }
     window.addEventListener('keydown', onK);
     activeSessionCleanup = () => window.removeEventListener('keydown', onK);
+    render();
+  }
+
+  /* =========================================================
+   * ТРЕНАЖЕР НЕПРАВИЛЬНИХ ДІЄСЛІВ
+   * Окремий від слів і від їхнього розкладу: дієслова однакові для всіх учнів і вшиті в застосунок.
+   * Прогрес по кожному дієслову — 5 «коробок» Лейтнера (0..5), локально й у таблиці irregular_progress.
+   * Статистику слів, серію й повторення карток цей тренажер не змінює.
+   * ========================================================= */
+  const IRREG = {"groups":{"aaa":"cut – cut – cut (три однакові)","aba":"come – came – come","ought":"buy – bought – bought (-ought / -aught)","sent":"send – sent – sent (d → t)","kept":"keep – kept – kept (коротка голосна + t)","sold":"sell – sold – sold (-old / -eld)","found":"find – found – found","said":"say – said – said","stood":"stand – stood – stood","sang":"sing – sang – sung","dug":"dig – dug – dug (V2 = V3 з u)","broke":"break – broke – broken","knew":"know – knew – known","gave":"give – gave – given","wrote":"write – wrote – written","took":"take – took – taken","wore":"wear – wore – worn","led":"lead – led – led","got":"get – got – got","sat":"sit – sat – sat","variant":"learn – learnt – learnt (-t або -ed)","unique":"особливі (запам'ятати окремо)"},"verbs":[{"v1":"be","v2":["was","were"],"v3":["been"],"uk":"бути","level":1,"group":"unique","note":""},{"v1":"become","v2":["became"],"v3":["become"],"uk":"ставати","level":1,"group":"aba","note":""},{"v1":"begin","v2":["began"],"v3":["begun"],"uk":"починати","level":1,"group":"sang","note":""},{"v1":"break","v2":["broke"],"v3":["broken"],"uk":"ламати","level":1,"group":"broke","note":""},{"v1":"bring","v2":["brought"],"v3":["brought"],"uk":"приносити","level":1,"group":"ought","note":""},{"v1":"build","v2":["built"],"v3":["built"],"uk":"будувати","level":1,"group":"sent","note":""},{"v1":"buy","v2":["bought"],"v3":["bought"],"uk":"купувати","level":1,"group":"ought","note":""},{"v1":"catch","v2":["caught"],"v3":["caught"],"uk":"ловити","level":1,"group":"ought","note":""},{"v1":"choose","v2":["chose"],"v3":["chosen"],"uk":"обирати","level":1,"group":"broke","note":""},{"v1":"come","v2":["came"],"v3":["come"],"uk":"приходити","level":1,"group":"aba","note":""},{"v1":"cost","v2":["cost"],"v3":["cost"],"uk":"коштувати","level":1,"group":"aaa","note":""},{"v1":"cut","v2":["cut"],"v3":["cut"],"uk":"різати","level":1,"group":"aaa","note":""},{"v1":"do","v2":["did"],"v3":["done"],"uk":"робити","level":1,"group":"unique","note":""},{"v1":"draw","v2":["drew"],"v3":["drawn"],"uk":"малювати, тягнути","level":1,"group":"knew","note":""},{"v1":"drink","v2":["drank"],"v3":["drunk"],"uk":"пити","level":1,"group":"sang","note":""},{"v1":"drive","v2":["drove"],"v3":["driven"],"uk":"водити (авто)","level":1,"group":"wrote","note":""},{"v1":"eat","v2":["ate"],"v3":["eaten"],"uk":"їсти","level":1,"group":"gave","note":""},{"v1":"fall","v2":["fell"],"v3":["fallen"],"uk":"падати","level":1,"group":"gave","note":""},{"v1":"feel","v2":["felt"],"v3":["felt"],"uk":"відчувати","level":1,"group":"kept","note":""},{"v1":"find","v2":["found"],"v3":["found"],"uk":"знаходити","level":1,"group":"found","note":""},{"v1":"fly","v2":["flew"],"v3":["flown"],"uk":"літати","level":1,"group":"knew","note":""},{"v1":"forget","v2":["forgot"],"v3":["forgotten"],"uk":"забувати","level":1,"group":"got","note":""},{"v1":"get","v2":["got"],"v3":["got","gotten"],"uk":"отримувати","level":1,"group":"got","note":"gotten — американський варіант V3"},{"v1":"give","v2":["gave"],"v3":["given"],"uk":"давати","level":1,"group":"gave","note":""},{"v1":"go","v2":["went"],"v3":["gone","been"],"uk":"іти, їхати","level":1,"group":"unique","note":"gone — пішов (і ще там); been — побував і повернувся"},{"v1":"grow","v2":["grew"],"v3":["grown"],"uk":"рости","level":1,"group":"knew","note":""},{"v1":"have","v2":["had"],"v3":["had"],"uk":"мати","level":1,"group":"unique","note":""},{"v1":"hear","v2":["heard"],"v3":["heard"],"uk":"чути","level":1,"group":"said","note":""},{"v1":"hit","v2":["hit"],"v3":["hit"],"uk":"бити, влучати","level":1,"group":"aaa","note":""},{"v1":"hold","v2":["held"],"v3":["held"],"uk":"тримати","level":1,"group":"sold","note":""},{"v1":"hurt","v2":["hurt"],"v3":["hurt"],"uk":"завдавати болю","level":1,"group":"aaa","note":""},{"v1":"keep","v2":["kept"],"v3":["kept"],"uk":"тримати, зберігати","level":1,"group":"kept","note":""},{"v1":"know","v2":["knew"],"v3":["known"],"uk":"знати","level":1,"group":"knew","note":""},{"v1":"learn","v2":["learnt","learned"],"v3":["learnt","learned"],"uk":"вчити","level":1,"group":"variant","note":"learnt — британський варіант"},{"v1":"leave","v2":["left"],"v3":["left"],"uk":"залишати, виходити","level":1,"group":"kept","note":""},{"v1":"lend","v2":["lent"],"v3":["lent"],"uk":"позичати (комусь)","level":1,"group":"sent","note":""},{"v1":"let","v2":["let"],"v3":["let"],"uk":"дозволяти","level":1,"group":"aaa","note":""},{"v1":"lose","v2":["lost"],"v3":["lost"],"uk":"втрачати, програвати","level":1,"group":"kept","note":""},{"v1":"make","v2":["made"],"v3":["made"],"uk":"робити, створювати","level":1,"group":"unique","note":""},{"v1":"mean","v2":["meant"],"v3":["meant"],"uk":"означати","level":1,"group":"kept","note":""},{"v1":"meet","v2":["met"],"v3":["met"],"uk":"зустрічати","level":1,"group":"led","note":""},{"v1":"pay","v2":["paid"],"v3":["paid"],"uk":"платити","level":1,"group":"said","note":""},{"v1":"put","v2":["put"],"v3":["put"],"uk":"класти","level":1,"group":"aaa","note":""},{"v1":"read","v2":["read"],"v3":["read"],"uk":"читати","level":1,"group":"led","note":"вимова V2 і V3: /red/"},{"v1":"ride","v2":["rode"],"v3":["ridden"],"uk":"їздити верхи, на велосипеді","level":1,"group":"wrote","note":""},{"v1":"ring","v2":["rang"],"v3":["rung"],"uk":"дзвонити","level":1,"group":"sang","note":""},{"v1":"run","v2":["ran"],"v3":["run"],"uk":"бігти","level":1,"group":"aba","note":""},{"v1":"say","v2":["said"],"v3":["said"],"uk":"казати","level":1,"group":"said","note":""},{"v1":"see","v2":["saw"],"v3":["seen"],"uk":"бачити","level":1,"group":"unique","note":""},{"v1":"sell","v2":["sold"],"v3":["sold"],"uk":"продавати","level":1,"group":"sold","note":""},{"v1":"send","v2":["sent"],"v3":["sent"],"uk":"надсилати","level":1,"group":"sent","note":""},{"v1":"set","v2":["set"],"v3":["set"],"uk":"встановлювати","level":1,"group":"aaa","note":""},{"v1":"show","v2":["showed"],"v3":["shown","showed"],"uk":"показувати","level":1,"group":"knew","note":""},{"v1":"shut","v2":["shut"],"v3":["shut"],"uk":"зачиняти","level":1,"group":"aaa","note":""},{"v1":"sing","v2":["sang"],"v3":["sung"],"uk":"співати","level":1,"group":"sang","note":""},{"v1":"sit","v2":["sat"],"v3":["sat"],"uk":"сидіти","level":1,"group":"sat","note":""},{"v1":"sleep","v2":["slept"],"v3":["slept"],"uk":"спати","level":1,"group":"kept","note":""},{"v1":"speak","v2":["spoke"],"v3":["spoken"],"uk":"говорити","level":1,"group":"broke","note":""},{"v1":"spend","v2":["spent"],"v3":["spent"],"uk":"витрачати","level":1,"group":"sent","note":""},{"v1":"stand","v2":["stood"],"v3":["stood"],"uk":"стояти","level":1,"group":"stood","note":""},{"v1":"swim","v2":["swam"],"v3":["swum"],"uk":"плавати","level":1,"group":"sang","note":""},{"v1":"take","v2":["took"],"v3":["taken"],"uk":"брати","level":1,"group":"took","note":""},{"v1":"teach","v2":["taught"],"v3":["taught"],"uk":"навчати","level":1,"group":"ought","note":""},{"v1":"tell","v2":["told"],"v3":["told"],"uk":"розповідати","level":1,"group":"sold","note":""},{"v1":"think","v2":["thought"],"v3":["thought"],"uk":"думати","level":1,"group":"ought","note":""},{"v1":"throw","v2":["threw"],"v3":["thrown"],"uk":"кидати","level":1,"group":"knew","note":""},{"v1":"understand","v2":["understood"],"v3":["understood"],"uk":"розуміти","level":1,"group":"stood","note":""},{"v1":"wake","v2":["woke","waked"],"v3":["woken","waked"],"uk":"прокидатися, будити","level":1,"group":"broke","note":""},{"v1":"wear","v2":["wore"],"v3":["worn"],"uk":"носити (одяг)","level":1,"group":"wore","note":""},{"v1":"win","v2":["won"],"v3":["won"],"uk":"вигравати","level":1,"group":"dug","note":""},{"v1":"write","v2":["wrote"],"v3":["written"],"uk":"писати","level":1,"group":"wrote","note":""},{"v1":"bend","v2":["bent"],"v3":["bent"],"uk":"гнути, згинати","level":2,"group":"sent","note":""},{"v1":"bet","v2":["bet"],"v3":["bet"],"uk":"робити ставку","level":2,"group":"aaa","note":""},{"v1":"bind","v2":["bound"],"v3":["bound"],"uk":"зв'язувати","level":2,"group":"found","note":""},{"v1":"bite","v2":["bit"],"v3":["bitten"],"uk":"кусати","level":2,"group":"wrote","note":""},{"v1":"bleed","v2":["bled"],"v3":["bled"],"uk":"стікати кров'ю","level":2,"group":"led","note":""},{"v1":"blow","v2":["blew"],"v3":["blown"],"uk":"дути","level":2,"group":"knew","note":""},{"v1":"breed","v2":["bred"],"v3":["bred"],"uk":"розводити (тварин)","level":2,"group":"led","note":""},{"v1":"broadcast","v2":["broadcast"],"v3":["broadcast"],"uk":"транслювати","level":2,"group":"aaa","note":""},{"v1":"burn","v2":["burnt","burned"],"v3":["burnt","burned"],"uk":"горіти, палити","level":2,"group":"variant","note":"burnt — британський варіант"},{"v1":"burst","v2":["burst"],"v3":["burst"],"uk":"лопатися, вибухати","level":2,"group":"aaa","note":""},{"v1":"cast","v2":["cast"],"v3":["cast"],"uk":"кидати, відливати","level":2,"group":"aaa","note":""},{"v1":"creep","v2":["crept"],"v3":["crept"],"uk":"повзти, підкрадатися","level":2,"group":"kept","note":""},{"v1":"deal","v2":["dealt"],"v3":["dealt"],"uk":"мати справу","level":2,"group":"kept","note":""},{"v1":"dig","v2":["dug"],"v3":["dug"],"uk":"копати","level":2,"group":"dug","note":""},{"v1":"dream","v2":["dreamt","dreamed"],"v3":["dreamt","dreamed"],"uk":"снитися, мріяти","level":2,"group":"variant","note":""},{"v1":"feed","v2":["fed"],"v3":["fed"],"uk":"годувати","level":2,"group":"led","note":""},{"v1":"fight","v2":["fought"],"v3":["fought"],"uk":"битися, боротися","level":2,"group":"ought","note":""},{"v1":"flee","v2":["fled"],"v3":["fled"],"uk":"тікати","level":2,"group":"led","note":""},{"v1":"forbid","v2":["forbade","forbad"],"v3":["forbidden"],"uk":"забороняти","level":2,"group":"gave","note":""},{"v1":"forgive","v2":["forgave"],"v3":["forgiven"],"uk":"пробачати","level":2,"group":"gave","note":""},{"v1":"freeze","v2":["froze"],"v3":["frozen"],"uk":"замерзати","level":2,"group":"broke","note":""},{"v1":"hang","v2":["hung","hanged"],"v3":["hung","hanged"],"uk":"вішати","level":2,"group":"dug","note":"hanged — лише про страту"},{"v1":"hide","v2":["hid"],"v3":["hidden"],"uk":"ховати(ся)","level":2,"group":"wrote","note":""},{"v1":"kneel","v2":["knelt","kneeled"],"v3":["knelt","kneeled"],"uk":"ставати на коліна","level":2,"group":"variant","note":""},{"v1":"lay","v2":["laid"],"v3":["laid"],"uk":"класти, покласти","level":2,"group":"said","note":"не плутати з lie"},{"v1":"lead","v2":["led"],"v3":["led"],"uk":"вести","level":2,"group":"led","note":""},{"v1":"lean","v2":["leant","leaned"],"v3":["leant","leaned"],"uk":"нахилятися, спиратися","level":2,"group":"variant","note":""},{"v1":"leap","v2":["leapt","leaped"],"v3":["leapt","leaped"],"uk":"стрибати","level":2,"group":"variant","note":""},{"v1":"lie","v2":["lay"],"v3":["lain"],"uk":"лежати","level":2,"group":"unique","note":"lie – lied – lied означає «брехати» (правильне дієслово)"},{"v1":"light","v2":["lit","lighted"],"v3":["lit","lighted"],"uk":"запалювати","level":2,"group":"unique","note":""},{"v1":"mistake","v2":["mistook"],"v3":["mistaken"],"uk":"помилятися, сплутати","level":2,"group":"took","note":""},{"v1":"overcome","v2":["overcame"],"v3":["overcome"],"uk":"подолати","level":2,"group":"aba","note":""},{"v1":"prove","v2":["proved"],"v3":["proved","proven"],"uk":"доводити","level":2,"group":"unique","note":""},{"v1":"quit","v2":["quit","quitted"],"v3":["quit","quitted"],"uk":"кидати, залишати","level":2,"group":"aaa","note":""},{"v1":"reset","v2":["reset"],"v3":["reset"],"uk":"скидати, перевстановлювати","level":2,"group":"aaa","note":""},{"v1":"rid","v2":["rid"],"v3":["rid"],"uk":"позбавляти","level":2,"group":"aaa","note":""},{"v1":"rise","v2":["rose"],"v3":["risen"],"uk":"підніматися","level":2,"group":"wrote","note":"не плутати з raise (правильне)"},{"v1":"seek","v2":["sought"],"v3":["sought"],"uk":"шукати","level":2,"group":"ought","note":""},{"v1":"shake","v2":["shook"],"v3":["shaken"],"uk":"трясти","level":2,"group":"took","note":""},{"v1":"shed","v2":["shed"],"v3":["shed"],"uk":"скидати, проливати","level":2,"group":"aaa","note":""},{"v1":"shine","v2":["shone","shined"],"v3":["shone","shined"],"uk":"світити","level":2,"group":"unique","note":"shined — «начищати»"},{"v1":"shoot","v2":["shot"],"v3":["shot"],"uk":"стріляти","level":2,"group":"unique","note":""},{"v1":"shrink","v2":["shrank","shrunk"],"v3":["shrunk"],"uk":"зменшуватися","level":2,"group":"sang","note":""},{"v1":"sink","v2":["sank","sunk"],"v3":["sunk"],"uk":"тонути","level":2,"group":"sang","note":""},{"v1":"slide","v2":["slid"],"v3":["slid"],"uk":"ковзати","level":2,"group":"unique","note":""},{"v1":"smell","v2":["smelt","smelled"],"v3":["smelt","smelled"],"uk":"пахнути, нюхати","level":2,"group":"variant","note":""},{"v1":"spell","v2":["spelt","spelled"],"v3":["spelt","spelled"],"uk":"вимовляти по буквах","level":2,"group":"variant","note":""},{"v1":"spill","v2":["spilt","spilled"],"v3":["spilt","spilled"],"uk":"розливати","level":2,"group":"variant","note":""},{"v1":"spin","v2":["spun","span"],"v3":["spun"],"uk":"крутити, прясти","level":2,"group":"dug","note":""},{"v1":"spit","v2":["spat","spit"],"v3":["spat","spit"],"uk":"плювати","level":2,"group":"sat","note":""},{"v1":"split","v2":["split"],"v3":["split"],"uk":"розколювати","level":2,"group":"aaa","note":""},{"v1":"spoil","v2":["spoilt","spoiled"],"v3":["spoilt","spoiled"],"uk":"псувати","level":2,"group":"variant","note":""},{"v1":"spread","v2":["spread"],"v3":["spread"],"uk":"поширювати","level":2,"group":"aaa","note":""},{"v1":"spring","v2":["sprang"],"v3":["sprung"],"uk":"стрибати, виникати","level":2,"group":"sang","note":""},{"v1":"steal","v2":["stole"],"v3":["stolen"],"uk":"красти","level":2,"group":"broke","note":""},{"v1":"stick","v2":["stuck"],"v3":["stuck"],"uk":"приклеювати, застрягати","level":2,"group":"dug","note":""},{"v1":"sting","v2":["stung"],"v3":["stung"],"uk":"жалити","level":2,"group":"dug","note":""},{"v1":"strike","v2":["struck"],"v3":["struck"],"uk":"бити, вражати","level":2,"group":"dug","note":""},{"v1":"swear","v2":["swore"],"v3":["sworn"],"uk":"присягати, лаятися","level":2,"group":"wore","note":""},{"v1":"sweep","v2":["swept"],"v3":["swept"],"uk":"мести","level":2,"group":"kept","note":""},{"v1":"swing","v2":["swung"],"v3":["swung"],"uk":"гойдатися","level":2,"group":"dug","note":""},{"v1":"tear","v2":["tore"],"v3":["torn"],"uk":"рвати","level":2,"group":"wore","note":""},{"v1":"undergo","v2":["underwent"],"v3":["undergone"],"uk":"зазнавати, проходити","level":2,"group":"unique","note":""},{"v1":"undo","v2":["undid"],"v3":["undone"],"uk":"скасовувати, розстібати","level":2,"group":"unique","note":""},{"v1":"upset","v2":["upset"],"v3":["upset"],"uk":"засмучувати","level":2,"group":"aaa","note":""},{"v1":"weep","v2":["wept"],"v3":["wept"],"uk":"плакати","level":2,"group":"kept","note":""},{"v1":"wind","v2":["wound"],"v3":["wound"],"uk":"накручувати","level":2,"group":"found","note":"wind /waɪnd/ – wound /waʊnd/"},{"v1":"withdraw","v2":["withdrew"],"v3":["withdrawn"],"uk":"знімати, виводити","level":2,"group":"knew","note":""},{"v1":"beat","v2":["beat"],"v3":["beaten"],"uk":"бити, перемагати","level":2,"group":"unique","note":""},{"v1":"sew","v2":["sewed"],"v3":["sewn","sewed"],"uk":"шити","level":2,"group":"unique","note":""},{"v1":"abide","v2":["abode","abided"],"v3":["abode","abided"],"uk":"терпіти; дотримуватися (abide by)","level":3,"group":"unique","note":""},{"v1":"arise","v2":["arose"],"v3":["arisen"],"uk":"виникати","level":3,"group":"wrote","note":""},{"v1":"awake","v2":["awoke","awaked"],"v3":["awoken","awaked"],"uk":"прокидатися","level":3,"group":"broke","note":""},{"v1":"bear","v2":["bore"],"v3":["borne"],"uk":"нести, терпіти; народжувати","level":3,"group":"wore","note":"born — «народжений» (be born)"},{"v1":"beget","v2":["begot","begat"],"v3":["begotten"],"uk":"породжувати","level":3,"group":"got","note":""},{"v1":"behold","v2":["beheld"],"v3":["beheld"],"uk":"бачити, споглядати","level":3,"group":"sold","note":""},{"v1":"bid","v2":["bid"],"v3":["bid"],"uk":"пропонувати ціну","level":3,"group":"aaa","note":""},{"v1":"cleave","v2":["clove","cleft","cleaved"],"v3":["cloven","cleft","cleaved"],"uk":"розрубувати; чіплятися","level":3,"group":"unique","note":""},{"v1":"cling","v2":["clung"],"v3":["clung"],"uk":"чіплятися","level":3,"group":"dug","note":""},{"v1":"dwell","v2":["dwelt","dwelled"],"v3":["dwelt","dwelled"],"uk":"мешкати","level":3,"group":"variant","note":""},{"v1":"fling","v2":["flung"],"v3":["flung"],"uk":"шпурляти","level":3,"group":"dug","note":""},{"v1":"forecast","v2":["forecast","forecasted"],"v3":["forecast","forecasted"],"uk":"прогнозувати","level":3,"group":"aaa","note":""},{"v1":"foresee","v2":["foresaw"],"v3":["foreseen"],"uk":"передбачати","level":3,"group":"unique","note":""},{"v1":"foretell","v2":["foretold"],"v3":["foretold"],"uk":"пророкувати","level":3,"group":"sold","note":""},{"v1":"forsake","v2":["forsook"],"v3":["forsaken"],"uk":"полишати","level":3,"group":"took","note":""},{"v1":"grind","v2":["ground"],"v3":["ground"],"uk":"молоти, шліфувати","level":3,"group":"found","note":""},{"v1":"knit","v2":["knit","knitted"],"v3":["knit","knitted"],"uk":"в'язати","level":3,"group":"aaa","note":""},{"v1":"mislay","v2":["mislaid"],"v3":["mislaid"],"uk":"загубити (десь)","level":3,"group":"said","note":""},{"v1":"mislead","v2":["misled"],"v3":["misled"],"uk":"вводити в оману","level":3,"group":"led","note":""},{"v1":"outdo","v2":["outdid"],"v3":["outdone"],"uk":"перевершувати","level":3,"group":"unique","note":""},{"v1":"outgrow","v2":["outgrew"],"v3":["outgrown"],"uk":"вирости з (чогось)","level":3,"group":"knew","note":""},{"v1":"outrun","v2":["outran"],"v3":["outrun"],"uk":"випереджати у бігу","level":3,"group":"aba","note":""},{"v1":"overdo","v2":["overdid"],"v3":["overdone"],"uk":"переборщити","level":3,"group":"unique","note":""},{"v1":"overeat","v2":["overate"],"v3":["overeaten"],"uk":"переїдати","level":3,"group":"gave","note":""},{"v1":"overhear","v2":["overheard"],"v3":["overheard"],"uk":"підслухати випадково","level":3,"group":"said","note":""},{"v1":"override","v2":["overrode"],"v3":["overridden"],"uk":"скасувати, перекрити","level":3,"group":"wrote","note":""},{"v1":"oversee","v2":["oversaw"],"v3":["overseen"],"uk":"наглядати","level":3,"group":"unique","note":""},{"v1":"oversleep","v2":["overslept"],"v3":["overslept"],"uk":"проспати","level":3,"group":"kept","note":""},{"v1":"overtake","v2":["overtook"],"v3":["overtaken"],"uk":"обганяти","level":3,"group":"took","note":""},{"v1":"overthrow","v2":["overthrew"],"v3":["overthrown"],"uk":"повалити","level":3,"group":"knew","note":""},{"v1":"partake","v2":["partook"],"v3":["partaken"],"uk":"брати участь, скуштувати","level":3,"group":"took","note":""},{"v1":"rebuild","v2":["rebuilt"],"v3":["rebuilt"],"uk":"перебудовувати","level":3,"group":"sent","note":""},{"v1":"rend","v2":["rent"],"v3":["rent"],"uk":"роздирати","level":3,"group":"sent","note":""},{"v1":"retell","v2":["retold"],"v3":["retold"],"uk":"переказувати","level":3,"group":"sold","note":""},{"v1":"rethink","v2":["rethought"],"v3":["rethought"],"uk":"переосмислювати","level":3,"group":"ought","note":""},{"v1":"rewrite","v2":["rewrote"],"v3":["rewritten"],"uk":"переписувати","level":3,"group":"wrote","note":""},{"v1":"shear","v2":["sheared"],"v3":["shorn","sheared"],"uk":"стригти (овець)","level":3,"group":"unique","note":""},{"v1":"slay","v2":["slew"],"v3":["slain"],"uk":"убивати","level":3,"group":"knew","note":""},{"v1":"sling","v2":["slung"],"v3":["slung"],"uk":"метати","level":3,"group":"dug","note":""},{"v1":"slink","v2":["slunk"],"v3":["slunk"],"uk":"прокрадатися","level":3,"group":"dug","note":""},{"v1":"slit","v2":["slit"],"v3":["slit"],"uk":"розрізати","level":3,"group":"aaa","note":""},{"v1":"smite","v2":["smote"],"v3":["smitten"],"uk":"уражати, вдаряти","level":3,"group":"wrote","note":""},{"v1":"sow","v2":["sowed"],"v3":["sown","sowed"],"uk":"сіяти","level":3,"group":"unique","note":""},{"v1":"stink","v2":["stank","stunk"],"v3":["stunk"],"uk":"смердіти","level":3,"group":"sang","note":""},{"v1":"stride","v2":["strode"],"v3":["stridden"],"uk":"крокувати","level":3,"group":"wrote","note":""},{"v1":"string","v2":["strung"],"v3":["strung"],"uk":"нанизувати","level":3,"group":"dug","note":""},{"v1":"strive","v2":["strove","strived"],"v3":["striven","strived"],"uk":"прагнути","level":3,"group":"wrote","note":""},{"v1":"swell","v2":["swelled"],"v3":["swollen","swelled"],"uk":"набрякати","level":3,"group":"unique","note":""},{"v1":"thrive","v2":["thrived","throve"],"v3":["thrived","thriven"],"uk":"процвітати","level":3,"group":"unique","note":""},{"v1":"thrust","v2":["thrust"],"v3":["thrust"],"uk":"штовхати","level":3,"group":"aaa","note":""},{"v1":"tread","v2":["trod"],"v3":["trodden","trod"],"uk":"ступати, топтати","level":3,"group":"unique","note":""},{"v1":"undertake","v2":["undertook"],"v3":["undertaken"],"uk":"брати на себе","level":3,"group":"took","note":""},{"v1":"unwind","v2":["unwound"],"v3":["unwound"],"uk":"розкручувати; розслаблятися","level":3,"group":"found","note":""},{"v1":"uphold","v2":["upheld"],"v3":["upheld"],"uk":"підтримувати, відстоювати","level":3,"group":"sold","note":""},{"v1":"weave","v2":["wove"],"v3":["woven"],"uk":"ткати, плести","level":3,"group":"broke","note":""},{"v1":"wed","v2":["wed","wedded"],"v3":["wed","wedded"],"uk":"одружувати(ся)","level":3,"group":"aaa","note":""},{"v1":"withhold","v2":["withheld"],"v3":["withheld"],"uk":"утримувати, не давати","level":3,"group":"sold","note":""},{"v1":"withstand","v2":["withstood"],"v3":["withstood"],"uk":"витримувати","level":3,"group":"stood","note":""},{"v1":"wring","v2":["wrung"],"v3":["wrung"],"uk":"викручувати, віджимати","level":3,"group":"dug","note":""}]};
+  const IRREG_LEVELS = [{ id: 0, name: 'Усі' }, { id: 1, name: 'Базовий' }, { id: 2, name: 'Середній' }, { id: 3, name: 'Просунутий' }];
+  const IRREG_DAYS = [0, 1, 3, 7, 14, 30];     // через скільки днів повторити, залежно від коробки
+  const IRREG_KEY = 'wb_irregular_v1';
+  const IRREG_SYNC_MS = 4000;
+  const irregPrefs = { level: 0, only: false };
+  let irregMap = {};                           // { 'go': { box, c, w, due, last } }
+  const irregDirty = new Set();
+  let irregTimer = null;
+
+  function irregStoreKey() { return IRREG_KEY + ':' + String((currentUser && currentUser.email) || '').toLowerCase(); }
+  function irregLoadLocal() {
+    try { irregMap = JSON.parse(window.localStorage.getItem(irregStoreKey()) || '{}') || {}; } catch (e) { irregMap = {}; }
+  }
+  function irregSaveLocal() {
+    try { window.localStorage.setItem(irregStoreKey(), JSON.stringify(irregMap)); } catch (e) {}
+  }
+  function irregNextBox(box, ok) { return ok ? Math.min(5, (Number(box) || 0) + 1) : 0; }
+  function irregDueAt(box, now) { return now + IRREG_DAYS[Math.max(0, Math.min(5, box))] * 86400000; }
+  function irregNorm(s) { return String(s || '').trim().toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, ' '); }
+  function irregCheckForm(input, accepted) {
+    const v = irregNorm(input);
+    return Boolean(v) && accepted.some(a => irregNorm(a) === v);
+  }
+  function irregFormsText(v) { return v.v1 + ' – ' + v.v2.join(' / ') + ' – ' + v.v3.join(' / '); }
+
+  function irregRecord(verb, ok, now = Date.now()) {
+    const cur = irregMap[verb.v1] || { box: 0, c: 0, w: 0, due: 0, last: 0 };
+    const box = irregNextBox(cur.box, ok);
+    irregMap[verb.v1] = { box, c: cur.c + (ok ? 1 : 0), w: cur.w + (ok ? 0 : 1), due: irregDueAt(box, now), last: now };
+    irregDirty.add(verb.v1);
+    irregSaveLocal();
+    queueIrregSync();
+  }
+
+  /* Спершу ті, що прийшов час повторити, потім ще не бачені, наприкінці решта. */
+  function irregPick(verbs, map, opts) {
+    const o = Object.assign({ level: 0, only: false, n: 10, now: Date.now() }, opts || {});
+    let list = verbs.filter(v => !o.level || v.level === o.level);
+    if (o.only) list = list.filter(v => map[v.v1] && map[v.v1].w > 0);
+    const due = list.filter(v => map[v.v1] && map[v.v1].due <= o.now).sort((a, b) => map[a.v1].due - map[b.v1].due);
+    const fresh = shuffle(list.filter(v => !map[v.v1]));
+    const rest = list.filter(v => map[v.v1] && map[v.v1].due > o.now).sort((a, b) => map[a.v1].due - map[b.v1].due);
+    return due.concat(fresh, rest).slice(0, o.n);
+  }
+  function irregFakeRegular(v1) {
+    if (/e$/.test(v1)) return v1 + 'd';
+    if (/[^aeiou]y$/.test(v1)) return v1.slice(0, -1) + 'ied';
+    return v1 + 'ed';
+  }
+  /* Чотири варіанти: правильний + «правдоподібні» хибні (дієслово за правилом, інша форма, інфінітив). */
+  function irregOptions(verb, form) {
+    const acc = verb[form];
+    const other = form === 'v2' ? verb.v3 : verb.v2;
+    const bad = [];
+    const add = s => { if (s && !acc.includes(s) && !bad.includes(s)) bad.push(s); };
+    add(irregFakeRegular(verb.v1));
+    other.forEach(add);
+    add(verb.v1);
+    add(verb.v1 + 'en');
+    add(verb.v1 + 'ed');
+    add(verb.v1 + 't');
+    IRREG.verbs.filter(x => x.group === verb.group && x.v1 !== verb.v1).forEach(x => add(x[form][0]));
+    return shuffle([acc[0]].concat(bad.slice(0, 3)));
+  }
+  function irregSentence(verb, form) {
+    return form === 'v2' ? `Yesterday she ______ (${verb.v1}).` : `She has already ______ (${verb.v1}).`;
+  }
+  /* Для сортування беремо групи, де є хоч 2 дієслова; «unique» і «variant» — не за звучанням, їх не беремо. */
+  function irregBuildSort(verbs) {
+    const by = {};
+    verbs.filter(v => v.group !== 'unique' && v.group !== 'variant').forEach(v => { (by[v.group] = by[v.group] || []).push(v); });
+    const ids = shuffle(Object.keys(by).filter(g => by[g].length >= 2)).slice(0, 3);
+    const items = [];
+    ids.forEach(g => items.push(...by[g].slice(0, 3)));
+    return { groups: ids, items: shuffle(items) };
+  }
+
+  /* --- синхронізація з хмарою: ті самі правила, що й у study_days --- */
+  function irregRow(email, verb) {
+    const m = irregMap[verb];
+    return { id: email + '|' + verb, user_email: email, verb, box: m.box, correct: m.c, wrong: m.w,
+      due_at: new Date(m.due).toISOString(), last_at: new Date(m.last).toISOString(), updated_at: new Date().toISOString() };
+  }
+  function queueIrregSync() {
+    if (irregTimer) clearTimeout(irregTimer);
+    irregTimer = setTimeout(() => { irregTimer = null; flushIrregular(); }, IRREG_SYNC_MS);
+  }
+  async function flushIrregular() {
+    if (irregTimer) { clearTimeout(irregTimer); irregTimer = null; }
+    if (!currentUser || irregDirty.size === 0) return;
+    const email = String(currentUser.email).toLowerCase();
+    const verbs = Array.from(irregDirty).filter(v => irregMap[v]);
+    try {
+      const { error } = await sbClient.from('irregular_progress').upsert(verbs.map(v => irregRow(email, v)), { onConflict: 'id' });
+      if (error) { console.warn('[irregular]', error.message || error); return; }
+      verbs.forEach(v => irregDirty.delete(v));
+    } catch (e) { console.warn('[irregular]', e); }
+  }
+  /* Злиття при вході: беремо запис з пізнішим last_at, лічильники — більші. */
+  function mergeIrregular(rows) {
+    (rows || []).forEach(r => {
+      const verb = String(r.verb || '');
+      if (!verb) return;
+      const last = Date.parse(r.last_at) || 0;
+      const cur = irregMap[verb];
+      const cloud = { box: Number(r.box) || 0, c: Number(r.correct) || 0, w: Number(r.wrong) || 0, due: Date.parse(r.due_at) || 0, last };
+      if (!cur) { irregMap[verb] = cloud; return; }
+      const newer = last > cur.last ? cloud : cur;
+      irregMap[verb] = { box: newer.box, c: Math.max(cur.c, cloud.c), w: Math.max(cur.w, cloud.w), due: newer.due, last: Math.max(cur.last, last) };
+    });
+  }
+  async function loadIrregular() {
+    irregDirty.clear();
+    irregLoadLocal();
+    if (!currentUser) return;
+    try {
+      const { data, error } = await sbClient.from('irregular_progress').select('verb, box, correct, wrong, due_at, last_at')
+        .eq('user_email', String(currentUser.email).toLowerCase());
+      if (error) { console.warn('[irregular]', error.message || error); return; }
+      mergeIrregular(data || []);
+      irregSaveLocal();
+    } catch (e) { console.warn('[irregular]', e); }
+  }
+
+  /* --- екран вибору --- */
+  function runIrregularHub(container) {
+    const learned = IRREG.verbs.filter(v => irregMap[v.v1] && irregMap[v.v1].box >= 4).length;
+    const avail = IRREG.verbs.filter(v => (!irregPrefs.level || v.level === irregPrefs.level) && (!irregPrefs.only || (irregMap[v.v1] && irregMap[v.v1].w > 0))).length;
+    const mech = [
+      { id: 'forms', name: 'Три форми', desc: 'Впишіть Past Simple і Past Participle' },
+      { id: 'pick', name: 'Яка форма?', desc: 'Речення з пропуском, 4 варіанти' },
+      { id: 'sort', name: 'Групи за звучанням', desc: 'Розкладіть дієслова за схемою' }
+    ];
+    container.innerHTML = `
+      <div class="session-header">
+        <button class="btn btn-sm" id="bEx">← До режимів</button>
+        <span class="session-progress">Неправильні дієслова</span>
+      </div>
+      <section class="study-card">
+        <div class="instruction-text">Вивчено ${learned} з ${IRREG.verbs.length} (коробка 4–5). Дієслова повертаються за розкладом, окремо від слів.</div>
+        <div class="chip-row">${IRREG_LEVELS.map(l => `<button type="button" class="filter-chip" data-lv="${l.id}" aria-pressed="${irregPrefs.level === l.id}">${l.name}</button>`).join('')}
+          <button type="button" class="filter-chip" id="bOnly" aria-pressed="${irregPrefs.only}">Лише ті, де помилявся</button></div>
+        <div style="font-size:var(--fs-small);color:var(--text-muted);margin:8px 0 12px;">Доступно дієслів: ${avail}</div>
+        <div class="modes-grid">${mech.map(m => `<button type="button" class="mode-tile${avail < 2 ? ' disabled' : ''}" data-irm="${m.id}" ${avail < 2 ? 'disabled' : ''}><div><div class="mode-title">${m.name}</div><div class="mode-desc">${m.desc}</div></div></button>`).join('')}</div>
+      </section>`;
+    container.querySelector('#bEx').addEventListener('click', exitToDashboard);
+    container.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => { irregPrefs.level = Number(b.dataset.lv); runIrregularHub(container); }));
+    container.querySelector('#bOnly').addEventListener('click', () => { irregPrefs.only = !irregPrefs.only; runIrregularHub(container); });
+    container.querySelectorAll('[data-irm]').forEach(b => b.addEventListener('click', () => {
+      const m = b.dataset.irm;
+      if (m === 'forms') runIrregForms(container);
+      else if (m === 'pick') runIrregPick(container);
+      else runIrregSort(container);
+    }));
+  }
+  function irregQueue() {
+    return irregPick(IRREG.verbs, irregMap, { level: irregPrefs.level, only: irregPrefs.only, n: roundSize() });
+  }
+  function irregSummary(container, results, again) {
+    cleanupSession();
+    container.innerHTML = `<section class="study-card"><div class="session-header"><h2 style="font-family:var(--font-word); font-size:1.35rem;">Підсумок раунду</h2><span class="session-progress">${results.filter(r => r.ok).length} / ${results.length}</span></div>
+      <div class="summary-list">${results.map(r => `<div class="summary-row"><div><strong style="font-family:var(--font-word);">${escapeHtml(irregFormsText(r.verb))}</strong><span style="color:var(--text-muted); margin-left:8px;">— ${escapeHtml(r.verb.uk)}</span></div><div style="display:flex; align-items:center; gap:8px;">${speakerBtnHtml(r.verb.v1 + ', ' + r.verb.v2[0] + ', ' + r.verb.v3[0])}<span class="${r.ok ? 'mark-ok' : 'mark-err'}">${r.ok ? '✓' : '✗'}</span></div></div>`).join('')}</div>
+      <div style="display:flex; gap:10px; margin-top:16px;"><button type="button" class="btn btn-primary" id="bAgain">Ще раунд</button><button type="button" class="btn" id="bBack">До дієслів</button></div></section>`;
+    container.querySelector('#bAgain').addEventListener('click', again);
+    container.querySelector('#bBack').addEventListener('click', () => runIrregularHub(container));
+    flushIrregular();
+  }
+
+  /* --- механіка 1: Три форми --- */
+  function runIrregForms(container) {
+    const qs = irregQueue();
+    if (qs.length === 0) { showToast('Немає дієслів за цим фільтром'); runIrregularHub(container); return; }
+    let idx = 0, chk = null, a2 = '', a3 = '';
+    const res = [];
+    function render() {
+      const v = qs[idx];
+      const note = v.note ? `<div style="font-size:var(--fs-small);color:var(--text-muted);margin-top:4px;">${escapeHtml(v.note)}</div>` : '';
+      container.innerHTML = `
+      <div class="session-header">
+        <button class="btn btn-sm" id="bEx">← Назад</button>
+        <span class="session-progress">Три форми · ${idx + 1} / ${qs.length}</span>
+      </div>
+      <section class="study-card">
+        <div class="instruction-text">Впишіть Past Simple (V2) і Past Participle (V3):</div>
+        <div class="study-example"><div><strong class="hl-word">${escapeHtml(v.v1)}</strong> — ${escapeHtml(v.uk)}</div>${speakerBtnHtml(v.v1)}</div>
+        <input type="text" id="in2" class="input" placeholder="V2 (Past Simple)" value="${escapeHtml(a2)}" autocomplete="off" autocapitalize="none" spellcheck="false" ${chk ? 'disabled' : ''}>
+        <input type="text" id="in3" class="input" placeholder="V3 (Past Participle)" value="${escapeHtml(a3)}" autocomplete="off" autocapitalize="none" spellcheck="false" ${chk ? 'disabled' : ''}>
+        ${!chk ? `<div style="display:flex;gap:10px;flex-wrap:wrap;"><button type="button" class="btn btn-primary" id="bCh">Перевірити</button><button type="button" class="btn" id="bSkip">Не знаю</button></div>`
+          : `<div class="feedback-box ${chk.ok ? 'ok' : 'err'}"><div>${chk.ok ? 'Правильно' : (chk.skip ? 'Не вгадали' : 'Є помилка')}</div>
+            <div style="font-family:var(--font-word);font-weight:700;font-size:1.25rem;margin-top:2px;">${escapeHtml(irregFormsText(v))}</div>
+            <div style="font-size:var(--fs-small);margin-top:6px;">Група: ${escapeHtml(IRREG.groups[v.group] || '')}</div>${note}</div>
+            <div class="next-row"><button type="button" class="btn btn-primary" id="bNx">Далі ${icon('arrowRight')}</button></div>`}
+      </section>`;
+      container.querySelector('#bEx').addEventListener('click', () => runIrregularHub(container));
+      const i2 = container.querySelector('#in2'), i3 = container.querySelector('#in3');
+      if (!chk) {
+        if (i2) i2.focus();
+        const sync = () => { a2 = i2.value; a3 = i3.value; };
+        i2.addEventListener('input', sync); i3.addEventListener('input', sync);
+        i2.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); i3.focus(); } });
+        i3.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); sync(); check(false); } });
+        container.querySelector('#bCh').addEventListener('click', () => { sync(); check(false); });
+        container.querySelector('#bSkip').addEventListener('click', () => check(true));
+      } else {
+        const nx = container.querySelector('#bNx');
+        if (nx) { nx.focus(); nx.addEventListener('click', next); }
+      }
+    }
+    function check(skip) {
+      if (chk) return;
+      const v = qs[idx];
+      const ok = !skip && irregCheckForm(a2, v.v2) && irregCheckForm(a3, v.v3);
+      chk = { ok, skip };
+      irregRecord(v, ok);
+      res.push({ verb: v, ok });
+      render();
+    }
+    function next() {
+      idx++; chk = null; a2 = ''; a3 = '';
+      if (idx >= qs.length) irregSummary(container, res, () => runIrregForms(container));
+      else render();
+    }
+    function onK(e) { if (chk && e.key === 'Enter') { e.preventDefault(); next(); } }
+    window.addEventListener('keydown', onK);
+    activeSessionCleanup = () => window.removeEventListener('keydown', onK);
+    render();
+  }
+
+  /* --- механіка 2: Яка форма? --- */
+  function runIrregPick(container) {
+    const qs = irregQueue().map((v, i) => ({ verb: v, form: i % 2 === 0 ? 'v2' : 'v3' }));
+    if (qs.length === 0) { showToast('Немає дієслів за цим фільтром'); runIrregularHub(container); return; }
+    qs.forEach(q => { q.opts = irregOptions(q.verb, q.form); });
+    shuffle(qs);
+    let idx = 0, picked = null;
+    const res = [];
+    function render() {
+      const q = qs[idx], v = q.verb;
+      const answered = picked !== null;
+      const ok = answered && q.verb[q.form].includes(q.opts[picked]);
+      const shown = escapeHtml(irregSentence(v, q.form)).replace('______', answered ? `<span class="hl-word">${escapeHtml(v[q.form][0])}</span>` : '<span class="hl-word">______</span>');
+      container.innerHTML = `
+      <div class="session-header">
+        <button class="btn btn-sm" id="bEx">← Назад</button>
+        <span class="session-progress">Яка форма? · ${idx + 1} / ${qs.length}</span>
+      </div>
+      <section class="study-card">
+        <div class="instruction-text">${q.form === 'v2' ? 'Past Simple' : 'Past Participle'} дієслова «${escapeHtml(v.uk)}»:</div>
+        <div class="study-example"><div>${shown}</div></div>
+        <div class="options-grid">${q.opts.map((o, i) => optionHtml(i, o, answered ? (v[q.form].includes(o) ? 'correct' : (i === picked ? 'wrong' : '')) : '', `data-i="${i}"`, answered)).join('')}</div>
+        ${answered ? `<div class="feedback-box ${ok ? 'ok' : 'err'}"><div style="font-family:var(--font-word);font-weight:700;font-size:1.25rem;">${escapeHtml(irregFormsText(v))}</div><div style="font-size:var(--fs-small);margin-top:6px;">Група: ${escapeHtml(IRREG.groups[v.group] || '')}</div></div><div class="next-row"><button type="button" class="btn btn-primary" id="bNx">Далі ${icon('arrowRight')}</button></div>` : ''}
+      </section>`;
+      container.querySelector('#bEx').addEventListener('click', () => runIrregularHub(container));
+      if (!answered) container.querySelectorAll('[data-i]').forEach(b => b.addEventListener('click', () => pick(Number(b.dataset.i))));
+      else { const nx = container.querySelector('#bNx'); if (nx) { nx.focus(); nx.addEventListener('click', next); } }
+    }
+    function pick(i) {
+      if (picked !== null) return;
+      const q = qs[idx];
+      picked = i;
+      const ok = q.verb[q.form].includes(q.opts[i]);
+      irregRecord(q.verb, ok);
+      res.push({ verb: q.verb, ok });
+      render();
+    }
+    function next() {
+      idx++; picked = null;
+      if (idx >= qs.length) irregSummary(container, res, () => runIrregPick(container));
+      else render();
+    }
+    function onK(e) {
+      if (picked !== null && e.key === 'Enter') { e.preventDefault(); next(); }
+      else if (picked === null && /^[1-4]$/.test(e.key)) pick(Number(e.key) - 1);
+    }
+    window.addEventListener('keydown', onK);
+    activeSessionCleanup = () => window.removeEventListener('keydown', onK);
+    render();
+  }
+
+  /* --- механіка 4: Групи за звучанням --- */
+  function runIrregSort(container) {
+    const pool = irregPick(IRREG.verbs, irregMap, { level: irregPrefs.level, only: irregPrefs.only, n: 60 });
+    const set = irregBuildSort(pool);
+    if (set.groups.length < 2 || set.items.length < 4) { showToast('Замало дієслів для сортування: змініть фільтр'); runIrregularHub(container); return; }
+    const placed = new Set(), missed = new Set();
+    const res = [];
+    let sel = null;
+    function render() {
+      const left = set.items.filter(v => !placed.has(v.v1));
+      container.innerHTML = `
+      <div class="session-header">
+        <button class="btn btn-sm" id="bEx">← Назад</button>
+        <span class="session-progress">Групи за звучанням · ${placed.size} / ${set.items.length}</span>
+      </div>
+      <section class="study-card">
+        <div class="instruction-text">Оберіть дієслово, потім групу, до якої воно належить:</div>
+        <div class="chip-row">${left.map(v => `<button type="button" class="filter-chip" data-v="${escapeHtml(v.v1)}" aria-pressed="${sel === v.v1}">${escapeHtml(v.v1)}</button>`).join('')}</div>
+        <div class="options-grid">${set.groups.map(g => `<button type="button" class="option-btn" data-g="${g}"><span class="opt-body"><span class="opt-word">${escapeHtml(IRREG.groups[g])}</span>${set.items.filter(v => placed.has(v.v1) && v.group === g).map(v => `<span style="font-size:var(--fs-small);color:var(--text-muted);">${escapeHtml(irregFormsText(v))}</span>`).join('')}</span></button>`).join('')}</div>
+      </section>`;
+      container.querySelector('#bEx').addEventListener('click', () => runIrregularHub(container));
+      container.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => { sel = b.dataset.v; render(); }));
+      container.querySelectorAll('[data-g]').forEach(b => b.addEventListener('click', () => drop(b.dataset.g)));
+    }
+    function drop(g) {
+      if (!sel) { showToast('Спершу оберіть дієслово'); return; }
+      const v = set.items.find(x => x.v1 === sel);
+      if (v.group === g) {
+        placed.add(v.v1);
+        if (!missed.has(v.v1)) { irregRecord(v, true); res.push({ verb: v, ok: true }); }
+        sel = null;
+        if (placed.size === set.items.length) { irregSummary(container, res, () => runIrregSort(container)); return; }
+      } else {
+        if (!missed.has(v.v1)) { missed.add(v.v1); irregRecord(v, false); res.push({ verb: v, ok: false }); }
+        showToast('Не ця група');
+      }
+      render();
+    }
     render();
   }
 
