@@ -875,8 +875,16 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     } else {
       throw new Error('Не знайдено JSON-масиву у квадратних дужках [ ... ].');
     }
-    text = text.replace(/[“”«»„‟]/g, '"').replace(/,\s*([\]}])/g, '$1');
-    const parsed = JSON.parse(text);
+    text = text.replace(/,\s*([\]}])/g, '$1');
+    /* Спершу текст як є: «ялинки» й лапки в самих рядках (переклад, приклад) мають лишатися.
+       Лише якщо це не JSON, пробуємо замінити типографські лапки, які ставлять редактори навколо ключів і значень. */
+    let parsed;
+    const attempts = [t => t, t => t.replace(/[“”„‟]/g, '"'), t => t.replace(/[“”«»„‟]/g, '"')];
+    let lastErr = null;
+    for (const fix of attempts) {
+      try { parsed = JSON.parse(fix(text)); lastErr = null; break; } catch (e) { lastErr = e; }
+    }
+    if (lastErr) throw lastErr;
     if (!Array.isArray(parsed)) throw new Error('Очікувався масив об’єктів слів.');
     return parsed;
   }

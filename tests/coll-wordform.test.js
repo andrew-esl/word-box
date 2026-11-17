@@ -92,3 +92,12 @@ test('Словотвір: відповідь оцінюється через isW
   assert.equal(ev('Dissatisfied', 'dissatisfied'), 'ok', 'регістр пробачний');
   assert.notEqual(ev('dissatified', 'dissatisfied'), 'ok', 'одруківка — помилка');
 });
+
+test('Імпорт JSON: «ялинки» всередині рядків не ламають розбір, типографські лапки навколо значень теж', async () => {
+  const app = await loadApp();
+  const parse = app.fn('parseTolerantWordsJson');
+  const a = parse('[{"term":"fit in","uk":"стати «своїм»"}]');
+  assert.equal(a[0].uk, 'стати «своїм»');
+  const b = parse('[{“term”:“go”,“uk”:“йти”,}]');
+  assert.equal(b[0].term, 'go');
+});
