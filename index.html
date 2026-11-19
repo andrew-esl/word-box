@@ -676,7 +676,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    *     Прогрес — коробки Лейтнера 0..5 у таблиці irregular_progress (SQL 005). Розклад слів, їхня статистика й серія не змінюються.
    *     Немає таблиці — тренажер працює, прогрес лишається на пристрої (у консолі лише попередження).
    * 25. Викладач теж учиться: кнопка «Вчитися» відкриває звичайний інтерфейс на його власних картках (його пошта в cards),
-   *     вкладка «Слова для мене» копіює слова учнів із чистим прогресом. Власні картки викладача не рахуються учнями.
+   *     вкладка «Слова для мене»: учень → тема → слова, копіює з чистим прогресом. Власні картки викладача не рахуються учнями.
    * Перед змінами: npm test
    * ===================================================================== */
   // 1. ІНІЦІАЛІЗАЦІЯ SUPABASE ТА ЗМІННИХ СТАНУ
@@ -970,7 +970,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    * ========================================================= */
   const teacher = { tab: 'students', rows: [], names: {}, days: {}, openEmail: null, nameEdit: null, query: '', topic: 'all', loaded: false, error: '',
     addOpen: false, addTopic: '', addMsg: '', addBusy: false, addUpdate: false, bareOnly: false,
-    mineTopic: null, minePicked: new Set(), mineMsg: '', mineBusy: false };
+    mineStudent: null, mineTopic: null, minePicked: new Set(), mineMsg: '', mineBusy: false };
 
   function teacherView() { return document.getElementById('teacherView'); }
 
@@ -1446,44 +1446,71 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    * Викладач проходить теми всіх учнів і забирає собі слова, які хоче вивчити сам.
    * Картки копіюються з чистим прогресом на пошту викладача; учнівські не змінюються.
    * ========================================================= */
-  function teacherMineCandidates() {
+  /* Слова учня, яких у викладача ще немає, згруповані за темою. Те саме слово в двох учнів
+     показується в обох; після копіювання зникає з обох, бо воно вже є у викладача. */
+  function teacherMineCandidates(email) {
     const me = ADMIN_EMAIL.toLowerCase();
     const have = new Set(teacher.rows.filter(w => w.userEmail === me).map(w => frKey(w.term)));
-    const seen = new Set(have);
     const topics = new Map();
-    teacher.rows.filter(w => w.userEmail && w.userEmail !== me).forEach(w => {
+    const seen = new Set();
+    teacher.rows.filter(w => w.userEmail === email).forEach(w => {
       const k = frKey(w.term);
       if (!k) return;
       const t = topics.get(w.src) || { name: w.src, words: [], total: 0 };
       t.total++;
-      if (!seen.has(k)) { seen.add(k); t.words.push(w); }
+      if (!have.has(k) && !seen.has(k)) { seen.add(k); t.words.push(w); }
       topics.set(w.src, t);
     });
-    return Array.from(topics.values()).filter(t => t.total > 0)
-      .sort((a, b) => b.words.length - a.words.length || a.name.localeCompare(b.name));
+    return Array.from(topics.values()).sort((a, b) => b.words.length - a.words.length || a.name.localeCompare(b.name));
+  }
+  function teacherMineStudents() {
+    return teacherStudents().map(st => ({
+      email: st.email,
+      name: studentLabel(st.email),
+      fresh: teacherMineCandidates(st.email).reduce((s, t) => s + t.words.length, 0),
+      total: st.total
+    })).sort((a, b) => b.fresh - a.fresh || a.name.localeCompare(b.name));
   }
 
   function renderTeacherMineTab(view) {
-    const topics = teacherMineCandidates();
-    const open = teacher.mineTopic && topics.find(t => t.name === teacher.mineTopic);
     const msg = teacher.mineMsg ? `<div class="feedback-box ok" style="margin-bottom:12px;">${escapeHtml(teacher.mineMsg)}</div>` : '';
+    const student = teacher.mineStudent;
+    // Рівень 1: учні
+    if (!student) {
+      const list = teacherMineStudents();
+      view.innerHTML = `
+        <div class="card-head"><h2 class="card-title">Слова для мене</h2><span class="pill-badge">${list.length} ${ukPlural(list.length, 'учень', 'учні', 'учнів')}</span></div>
+        ${msg}
+        <section class="study-card">
+          <div class="instruction-text">Оберіть учня, щоб побачити слова, які ви йому давали, і забрати собі потрібні. Слова, які вже є у вас, не показуються.</div>
+          ${list.length === 0 ? '<div>Поки немає учнів.</div>' : `<div class="options-grid">${list.map(s => `<button type="button" class="option-btn" data-ms="${escapeHtml(s.email)}"><span class="opt-body"><span class="opt-word">${escapeHtml(s.name)}</span><span style="font-size:var(--fs-small);color:var(--text-muted);">нових для вас: ${s.fresh} з ${s.total}</span></span></button>`).join('')}</div>`}
+        </section>`;
+      view.querySelectorAll('[data-ms]').forEach(b => b.addEventListener('click', () => {
+        teacher.mineStudent = b.dataset.ms; teacher.mineTopic = null; teacher.minePicked = new Set(); teacher.mineMsg = ''; renderTeacherPanel();
+      }));
+      return;
+    }
+    const topics = teacherMineCandidates(student);
+    const open = teacher.mineTopic && topics.find(t => t.name === teacher.mineTopic);
+    // Рівень 2: теми цього учня
     if (!open) {
       teacher.mineTopic = null;
       view.innerHTML = `
-        <div class="card-head"><h2 class="card-title">Слова для мене</h2><span class="pill-badge">${topics.reduce((s, t) => s + t.words.length, 0)} нових</span></div>
+        <div class="session-header"><button class="btn btn-sm" id="bMineBack">← Учні</button><span class="session-progress">${escapeHtml(studentLabel(student))}</span></div>
         ${msg}
         <section class="study-card">
-          <div class="instruction-text">Оберіть тему, щоб побачити слова учнів і забрати собі потрібні. Слова, які вже є у вас, не показуються.</div>
-          ${topics.length === 0 ? '<div>Поки немає слів учнів.</div>' : `<div class="options-grid">${topics.map(t => `<button type="button" class="option-btn" data-mt="${escapeHtml(t.name)}"><span class="opt-body"><span class="opt-word">${escapeHtml(t.name)}</span><span style="font-size:var(--fs-small);color:var(--text-muted);">нових для вас: ${t.words.length} з ${t.total}</span></span></button>`).join('')}</div>`}
+          ${topics.length === 0 ? '<div>У цього учня поки немає слів.</div>' : `<div class="options-grid">${topics.map(t => `<button type="button" class="option-btn" data-mt="${escapeHtml(t.name)}"><span class="opt-body"><span class="opt-word">${escapeHtml(t.name)}</span><span style="font-size:var(--fs-small);color:var(--text-muted);">нових для вас: ${t.words.length} з ${t.total}</span></span></button>`).join('')}</div>`}
         </section>`;
+      view.querySelector('#bMineBack').addEventListener('click', () => { teacher.mineStudent = null; renderTeacherPanel(); });
       view.querySelectorAll('[data-mt]').forEach(b => b.addEventListener('click', () => {
         teacher.mineTopic = b.dataset.mt; teacher.minePicked = new Set(); teacher.mineMsg = ''; renderTeacherPanel();
       }));
       return;
     }
+    // Рівень 3: слова теми
     const picked = teacher.minePicked;
     view.innerHTML = `
-      <div class="session-header"><button class="btn btn-sm" id="bMineBack">← Теми</button><span class="session-progress">${escapeHtml(open.name)}</span></div>
+      <div class="session-header"><button class="btn btn-sm" id="bMineBack">← Теми</button><span class="session-progress">${escapeHtml(studentLabel(student))} · ${escapeHtml(open.name)}</span></div>
       ${msg}
       <section class="study-card">
         ${open.words.length === 0 ? '<div>Усі слова цієї теми вже у вас.</div>' : `

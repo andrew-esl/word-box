@@ -21,23 +21,25 @@ test('Власні картки викладача не з’являються 
   assert.deepEqual(app.fn('teacherStudents')().map(s => s.email).sort(), ['olena@x.com', 'taras@x.com']);
 });
 
-test('Кандидати: без слів, які вже є у викладача, без дублів між учнями, з групуванням за темою', async () => {
+test('Кандидати по учню: без слів, які вже є у викладача, з групуванням за темою', async () => {
   const app = await mk(); await settle();
-  const t = app.fn('teacherMineCandidates')();
-  const eleven = t.find(x => x.name === 'Eleven Weeks');
-  assert.deepEqual(eleven.words.map(w => w.term), ['settle in'], 'fit in вже є, Settle in від Тараса — дубль');
-  assert.equal(t.find(x => x.name === 'Cafe').words.length, 1);
+  const o = app.fn('teacherMineCandidates')('olena@x.com');
+  assert.deepEqual(o.find(x => x.name === 'Eleven Weeks').words.map(w => w.term), ['settle in'], 'fit in вже є у викладача');
+  assert.equal(app.fn('teacherMineCandidates')('taras@x.com').find(x => x.name === 'Cafe').words.length, 1);
+  const st = app.fn('teacherMineStudents')();
+  assert.deepEqual(st.map(s => s.email).sort(), ['olena@x.com', 'taras@x.com']);
+  assert.equal(st.find(s => s.email === 'olena@x.com').fresh, 1);
 });
 
 test('Копіювання: чистий прогрес, власник — викладач, картки учнів не змінюються', async () => {
   const app = await mk(); await settle();
-  const topic = app.fn('teacherMineCandidates')().find(x => x.name === 'Eleven Weeks');
+  const topic = app.fn('teacherMineCandidates')('olena@x.com').find(x => x.name === 'Eleven Weeks');
   app.api.teacher.minePicked = new Set(topic.words.map(w => w.id));
   await app.fn('teacherTakeWords')(topic);
   const mine = app.db.rows.filter(r => r.user_email === ME && r.term === 'settle in');
   assert.equal(mine.length, 1);
   assert.equal(mine[0].r, 0); assert.equal(mine[0].l, 0); assert.equal(mine[0].due, 0);
-  const olena = app.db.rows.find(r => r.user_email === 'olena@x.com' && r.term === 'settle in');
-  assert.equal(olena.r, 5, 'прогрес учня не торкнуто');
-  assert.equal(app.fn('teacherMineCandidates')().find(x => x.name === 'Eleven Weeks').words.length, 0, 'слово більше не пропонується');
+  assert.equal(app.db.rows.find(r => r.user_email === 'olena@x.com' && r.term === 'settle in').r, 5, 'прогрес учня не торкнуто');
+  assert.equal(app.fn('teacherMineCandidates')('olena@x.com').find(x => x.name === 'Eleven Weeks').words.length, 0);
+  assert.equal(app.fn('teacherMineCandidates')('taras@x.com').find(x => x.name === 'Eleven Weeks').words.length, 0, 'у Тараса те саме слово теж зникло');
 });
