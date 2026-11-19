@@ -579,13 +579,15 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
       <span class="brand-sub">Word Box</span>
     </div>
     <div class="header-controls">
+      <button type="button" class="btn btn-sm" id="btnTeacherLearn" title="Вчити власні слова, як учень">Вчитися</button>
       <button type="button" class="icon-btn" id="btnTeacherTheme" title="Тема оформлення" aria-label="Тема оформлення"></button>
       <button type="button" class="icon-btn" id="btnTeacherSignOut" title="Вийти" aria-label="Вийти"></button>
     </div>
   </header>
-  <div class="seg-tabs" role="tablist">
+  <div class="seg-tabs" role="tablist" style="grid-template-columns:repeat(3,1fr);">
     <button type="button" class="seg-tab active" data-tt="students" role="tab">Учні</button>
     <button type="button" class="seg-tab" data-tt="add" role="tab">Додати слова</button>
+    <button type="button" class="seg-tab" data-tt="mine" role="tab">Слова для мене</button>
   </div>
   <main id="teacherView"></main>
 </div>
@@ -599,6 +601,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     <div class="header-controls">
       <div class="lang-switch"><button type="button" id="btnModeUkEn" class="active">UK·EN</button><button type="button" id="btnModeEnEn">EN·EN</button></div>
       <button type="button" class="icon-btn" id="btnThemeToggle" title="Тема оформлення" aria-label="Тема оформлення"></button>
+      <button type="button" class="btn btn-sm" id="btnBackToCabinet" style="display:none;">Кабінет</button>
       <button type="button" class="icon-btn" id="btnSignOut" title="Вийти" aria-label="Вийти"></button>
     </div>
   </header>
@@ -672,6 +675,8 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    * 24. Неправильні дієслова — окремий тренажер для всіх учнів: 200 дієслів вшито в застосунок (IRREG), хмара лише для прогресу.
    *     Прогрес — коробки Лейтнера 0..5 у таблиці irregular_progress (SQL 005). Розклад слів, їхня статистика й серія не змінюються.
    *     Немає таблиці — тренажер працює, прогрес лишається на пристрої (у консолі лише попередження).
+   * 25. Викладач теж учиться: кнопка «Вчитися» відкриває звичайний інтерфейс на його власних картках (його пошта в cards),
+   *     вкладка «Слова для мене» копіює слова учнів із чистим прогресом. Власні картки викладача не рахуються учнями.
    * Перед змінами: npm test
    * ===================================================================== */
   // 1. ІНІЦІАЛІЗАЦІЯ SUPABASE ТА ЗМІННИХ СТАНУ
@@ -964,7 +969,8 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    * а не тисячі, тож окремі запити на кожного були б зайвим навантаженням.
    * ========================================================= */
   const teacher = { tab: 'students', rows: [], names: {}, days: {}, openEmail: null, nameEdit: null, query: '', topic: 'all', loaded: false, error: '',
-    addOpen: false, addTopic: '', addMsg: '', addBusy: false, addUpdate: false, bareOnly: false };
+    addOpen: false, addTopic: '', addMsg: '', addBusy: false, addUpdate: false, bareOnly: false,
+    mineTopic: null, minePicked: new Set(), mineMsg: '', mineBusy: false };
 
   function teacherView() { return document.getElementById('teacherView'); }
 
@@ -1025,8 +1031,10 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
   }
 
   function teacherStudents() {
-    const emails = Array.from(new Set(teacher.rows.map(w => w.userEmail).filter(Boolean)));
-    Object.keys(teacher.names).forEach(e => { if (!emails.includes(e)) emails.push(e); });
+    // Власні слова викладача (режим «Вчитися») — не учень, у списку їх немає
+    const me = ADMIN_EMAIL.toLowerCase();
+    const emails = Array.from(new Set(teacher.rows.map(w => w.userEmail).filter(e => e && e !== me)));
+    Object.keys(teacher.names).forEach(e => { if (e !== me && !emails.includes(e)) emails.push(e); });
     return emails.map(teacherStudentStats).sort((a, b) => b.last - a.last || a.email.localeCompare(b.email));
   }
 
@@ -1049,6 +1057,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
       view.innerHTML = `<section class="study-card"><div class="feedback-box err">${escapeHtml(teacher.error)}</div></section>`;
       return;
     }
+    if (teacher.tab === 'mine') return renderTeacherMineTab(view);
     if (teacher.openEmail) return renderTeacherStudent(view, teacher.openEmail);
     renderTeacherStudentsList(view);
   }
@@ -1422,8 +1431,121 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     if (tt) { tt.innerHTML = icon(THEME_ICON[THEME_CYCLE.includes(state.settings.theme) ? state.settings.theme : 'auto']); tt.addEventListener('click', cycleTheme); }
     const so = document.getElementById('btnTeacherSignOut');
     if (so) so.addEventListener('click', () => signOut());
+    const tl = document.getElementById('btnTeacherLearn');
+    if (tl) tl.addEventListener('click', enterTeacherLearn);
+    const bc = document.getElementById('btnBackToCabinet');
+    if (bc) bc.addEventListener('click', leaveTeacherLearn);
     renderTeacherPanel();
     await loadTeacherData();
+    renderTeacherPanel();
+  }
+
+
+  /* =========================================================
+   * ПАНЕЛЬ ВИКЛАДАЧА: СЛОВА ДЛЯ МЕНЕ
+   * Викладач проходить теми всіх учнів і забирає собі слова, які хоче вивчити сам.
+   * Картки копіюються з чистим прогресом на пошту викладача; учнівські не змінюються.
+   * ========================================================= */
+  function teacherMineCandidates() {
+    const me = ADMIN_EMAIL.toLowerCase();
+    const have = new Set(teacher.rows.filter(w => w.userEmail === me).map(w => frKey(w.term)));
+    const seen = new Set(have);
+    const topics = new Map();
+    teacher.rows.filter(w => w.userEmail && w.userEmail !== me).forEach(w => {
+      const k = frKey(w.term);
+      if (!k) return;
+      const t = topics.get(w.src) || { name: w.src, words: [], total: 0 };
+      t.total++;
+      if (!seen.has(k)) { seen.add(k); t.words.push(w); }
+      topics.set(w.src, t);
+    });
+    return Array.from(topics.values()).filter(t => t.total > 0)
+      .sort((a, b) => b.words.length - a.words.length || a.name.localeCompare(b.name));
+  }
+
+  function renderTeacherMineTab(view) {
+    const topics = teacherMineCandidates();
+    const open = teacher.mineTopic && topics.find(t => t.name === teacher.mineTopic);
+    const msg = teacher.mineMsg ? `<div class="feedback-box ok" style="margin-bottom:12px;">${escapeHtml(teacher.mineMsg)}</div>` : '';
+    if (!open) {
+      teacher.mineTopic = null;
+      view.innerHTML = `
+        <div class="card-head"><h2 class="card-title">Слова для мене</h2><span class="pill-badge">${topics.reduce((s, t) => s + t.words.length, 0)} нових</span></div>
+        ${msg}
+        <section class="study-card">
+          <div class="instruction-text">Оберіть тему, щоб побачити слова учнів і забрати собі потрібні. Слова, які вже є у вас, не показуються.</div>
+          ${topics.length === 0 ? '<div>Поки немає слів учнів.</div>' : `<div class="options-grid">${topics.map(t => `<button type="button" class="option-btn" data-mt="${escapeHtml(t.name)}"><span class="opt-body"><span class="opt-word">${escapeHtml(t.name)}</span><span style="font-size:var(--fs-small);color:var(--text-muted);">нових для вас: ${t.words.length} з ${t.total}</span></span></button>`).join('')}</div>`}
+        </section>`;
+      view.querySelectorAll('[data-mt]').forEach(b => b.addEventListener('click', () => {
+        teacher.mineTopic = b.dataset.mt; teacher.minePicked = new Set(); teacher.mineMsg = ''; renderTeacherPanel();
+      }));
+      return;
+    }
+    const picked = teacher.minePicked;
+    view.innerHTML = `
+      <div class="session-header"><button class="btn btn-sm" id="bMineBack">← Теми</button><span class="session-progress">${escapeHtml(open.name)}</span></div>
+      ${msg}
+      <section class="study-card">
+        ${open.words.length === 0 ? '<div>Усі слова цієї теми вже у вас.</div>' : `
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <button type="button" class="btn btn-sm" id="bMineAll">${picked.size === open.words.length ? 'Зняти всі' : 'Обрати всі'}</button>
+          <button type="button" class="btn btn-sm btn-primary" id="bMineAdd" ${picked.size && !teacher.mineBusy ? '' : 'disabled'}>Додати собі (${picked.size})</button>
+        </div>
+        <div class="summary-list">${open.words.map((w, i) => `<label class="summary-row" style="cursor:pointer;gap:10px;"><span style="display:flex;align-items:center;gap:10px;min-width:0;"><input type="checkbox" data-mw="${i}" ${picked.has(w.id) ? 'checked' : ''}><span><strong style="font-family:var(--font-word);">${escapeHtml(w.term)}</strong><span style="color:var(--text-muted);margin-left:8px;">— ${escapeHtml(w.uk)}</span></span></span></label>`).join('')}</div>`}
+      </section>`;
+    view.querySelector('#bMineBack').addEventListener('click', () => { teacher.mineTopic = null; renderTeacherPanel(); });
+    const all = view.querySelector('#bMineAll');
+    if (all) all.addEventListener('click', () => {
+      teacher.minePicked = picked.size === open.words.length ? new Set() : new Set(open.words.map(w => w.id));
+      renderTeacherPanel();
+    });
+    view.querySelectorAll('[data-mw]').forEach(c => c.addEventListener('change', () => {
+      const w = open.words[Number(c.dataset.mw)];
+      if (c.checked) picked.add(w.id); else picked.delete(w.id);
+      renderTeacherPanel();
+    }));
+    const add = view.querySelector('#bMineAdd');
+    if (add) add.addEventListener('click', () => teacherTakeWords(open));
+  }
+
+  async function teacherTakeWords(topic) {
+    if (teacher.mineBusy) return;
+    const chosen = topic.words.filter(w => teacher.minePicked.has(w.id));
+    if (chosen.length === 0) return;
+    teacher.mineBusy = true;
+    try {
+      const me = ADMIN_EMAIL.toLowerCase();
+      const inserted = await insertWordsBatchForEmail(me, chosen.map(w => Object.assign({}, w, { added: todayStr() })));
+      teacher.rows.push(...inserted.map(r => normalizeWordRow(Object.assign({ user_email: me }, r))));
+      teacher.mineMsg = `Додано собі слів: ${inserted.length}. Вони з'являться в режимі «Вчитися».`;
+      teacher.minePicked = new Set();
+    } catch (err) {
+      teacher.mineMsg = '';
+      alert('Не вдалося додати: ' + (err.message || err));
+    }
+    teacher.mineBusy = false;
+    renderTeacherPanel();
+  }
+
+  /* Викладач навчається у тому самому інтерфейсі, що й учні, на власних картках. */
+  async function enterTeacherLearn() {
+    document.getElementById('teacher-screen').style.display = 'none';
+    document.getElementById('app-screen').style.display = 'flex';
+    const back = document.getElementById('btnBackToCabinet');
+    if (back) back.style.display = '';
+    state.words = [];
+    loadLocalStats();
+    loadPendingProgress();
+    await flushPendingProgress();
+    try { await loadStudentProfile(); } catch (e) { console.warn('[teacher-learn]', e); }
+    await loadStudyDays();
+    await loadIrregular();
+    await loadStudentWords();
+  }
+  function leaveTeacherLearn() {
+    cleanupSession();
+    document.getElementById('app-screen').style.display = 'none';
+    document.getElementById('teacher-screen').style.display = 'flex';
     renderTeacherPanel();
   }
 
