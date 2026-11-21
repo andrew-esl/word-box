@@ -677,6 +677,9 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    *     Немає таблиці — тренажер працює, прогрес лишається на пристрої (у консолі лише попередження).
    * 25. Викладач теж учиться: кнопка «Вчитися» відкриває звичайний інтерфейс на його власних картках (його пошта в cards),
    *     вкладка «Слова для мене»: учень → тема → слова, копіює з чистим прогресом. Власні картки викладача не рахуються учнями.
+   * 26. Мова учня (uk | ru) лежить у student_settings (SQL 006), її вмикає викладач у картці учня.
+   *     Переклад слів російською зберігається в тому самому полі uk: окремого поля немає.
+   *     Нема таблиці — усі україномовні, помилка лише в консолі.
    * Перед змінами: npm test
    * ===================================================================== */
   // 1. ІНІЦІАЛІЗАЦІЯ SUPABASE ТА ЗМІННИХ СТАНУ
@@ -698,7 +701,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
   
   const defaultState = () => ({ 
     words: [], 
-    settings: { langMode: 'UK_EN', newLimit: 10, voiceURI: '', theme: 'auto', accent: 'forest', focusTopic: 'all', choiceDir: 'random', profileName: '', autoNext: true, tempo: 'standard', wordsView: 'full', roundSize: 10 },
+    settings: { langMode: 'UK_EN', newLimit: 10, voiceURI: '', theme: 'auto', accent: 'forest', focusTopic: 'all', choiceDir: 'random', profileName: '', lang: 'uk', autoNext: true, tempo: 'standard', wordsView: 'full', roundSize: 10 },
     stats: { streak: 0, lastStudyDate: '', dailyDate: todayStr(), answersToday: 0, newLearnedToday: 0, blitzBest: 0, days: {} } 
   });
   let state = defaultState();
@@ -793,6 +796,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
           loadPendingProgress();
           await flushPendingProgress(); // догнати те, що не встигло зберегтись минулого разу
           await loadStudentProfile();
+          await loadStudentLang();
           await loadStudyDays();
           await loadIrregular();
           await loadStudentWords();
@@ -949,6 +953,37 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
   }
   /* Перейменування з картки учня: зберігає в базі й, лише якщо база підтвердила, оновлює ім'я в панелі.
      Помилка лишає старе ім'я на місці. */
+  /* Мова сайту й слів учня. 'uk' за замовчуванням, 'ru' вмикає викладач у картці учня. */
+  const LANGS = [{ id: 'uk', name: 'Українська' }, { id: 'ru', name: 'Російська' }];
+  function normLang(v) { return v === 'ru' ? 'ru' : 'uk'; }
+  function teacherLangOf(email) { return normLang(teacher.langs[String(email || '').toLowerCase()]); }
+  async function saveStudentLang(email, lang) {
+    const l = normLang(lang);
+    const { error } = await sbClient.from('student_settings').upsert({ user_email: email, lang: l, updated_at: new Date().toISOString() }, { onConflict: 'user_email' });
+    if (error) {
+      const missing = error.code === '42P01' || (/student_settings/i.test(error.message || '') && /does not exist|schema cache|relation/i.test(error.message || ''));
+      return { ok: false, message: missing
+        ? 'у Supabase ще немає таблиці student_settings. Виконайте supabase/006_student_settings.sql (один раз).'
+        : (error.message || 'невідома помилка.') };
+    }
+    teacher.langs[email] = l;
+    return { ok: true, lang: l };
+  }
+  function applyLang() {
+    const l = normLang(state.settings && state.settings.lang);
+    try { document.documentElement.setAttribute('lang', l); } catch (e) {}
+  }
+  async function loadStudentLang() {
+    if (!currentUser) return;
+    try {
+      const { data, error } = await sbClient.from('student_settings').select('lang').eq('user_email', String(currentUser.email).toLowerCase());
+      if (error) { console.warn('[lang]', error.message || error); return; }
+      const l = normLang(data && data[0] && data[0].lang);
+      if (l !== state.settings.lang) { state.settings.lang = l; saveLocalStats(); }
+      applyLang();
+    } catch (e) { console.warn('[lang]', e); }
+  }
+
   async function teacherRenameStudent(email, rawName) {
     const res = await saveStudentName(email, rawName);
     if (res.ok) teacher.names[email] = res.name;
@@ -970,7 +1005,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
    * ========================================================= */
   const teacher = { tab: 'students', rows: [], names: {}, days: {}, openEmail: null, nameEdit: null, query: '', topic: 'all', loaded: false, error: '',
     addOpen: false, addTopic: '', addMsg: '', addBusy: false, addUpdate: false, bareOnly: false,
-    mineStudent: null, mineTopic: null, minePicked: new Set(), mineMsg: '', mineBusy: false };
+    langs: {}, mineStudent: null, mineTopic: null, minePicked: new Set(), mineMsg: '', mineBusy: false };
 
   function teacherView() { return document.getElementById('teacherView'); }
 
@@ -995,6 +1030,10 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
       if (!e || !day) return;
       (teacher.days[e] = teacher.days[e] || {})[day] = { a: Number(r.answers) || 0, c: Number(r.correct) || 0, n: Number(r.new_words) || 0, k: r.cleared ? 1 : 0 };
     });
+    // Мова сайту учня (006_student_settings.sql). Немає таблиці — усі вважаються україномовними.
+    teacher.langs = {};
+    const sets = await sbClient.from('student_settings').select('user_email, lang');
+    if (!sets.error) (sets.data || []).forEach(r => { teacher.langs[String(r.user_email).toLowerCase()] = r.lang === 'ru' ? 'ru' : 'uk'; });
     const profs = await sbClient.from('student_profiles').select('user_email, name');
     teacher.names = {};
     if (!profs.error) (profs.data || []).forEach(r => { teacher.names[String(r.user_email).toLowerCase()] = r.name; });
@@ -1128,6 +1167,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
           <span class="student-email copy-text">${escapeHtml(email)}</span>
           <button type="button" class="copy-btn" data-copy="email" aria-label="Копіювати пошту" title="Копіювати пошту">${icon('copy')}</button>
         </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 14px;"><span style="font-size:var(--fs-small);color:var(--text-muted);">Мова сайту й слів:</span>${LANGS.map(l => `<button type="button" class="filter-chip" style="margin-bottom:0;" data-lang="${l.id}" aria-pressed="${teacherLangOf(email) === l.id}">${l.name}</button>`).join('')}</div>
         <button type="button" class="btn btn-primary" id="btnTAddToggle" style="width:100%; margin-bottom:16px;" aria-expanded="${teacher.addOpen}">${icon('plus')} Додати слова</button>
         <div class="segment-bar">
           <div class="seg-part" style="width:${(st.counts.new / total) * 100}%; background:var(--st-new);"></div>
@@ -1212,6 +1252,13 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     const bareBtn = view.querySelector('#btnTBare');
     if (bareBtn) bareBtn.addEventListener('click', () => { teacher.bareOnly = !teacher.bareOnly; renderTeacherPanel(); });
     view.querySelector('#tTopic').addEventListener('change', e => { teacher.topic = e.target.value; renderTeacherPanel(); });
+    view.querySelectorAll('[data-lang]').forEach(b => b.addEventListener('click', async () => {
+      if (teacherLangOf(email) === b.dataset.lang) return;
+      const res = await saveStudentLang(email, b.dataset.lang);
+      if (!res.ok) { alert(`⚠️ Не вдалося змінити мову: ${res.message}`); return; }
+      renderTeacherPanel();
+      showToast(res.lang === 'ru' ? 'Мова учня: російська' : 'Мова учня: українська');
+    }));
     if (teacher.nameEdit !== email) {
       view.querySelector('#btnTNameEdit').addEventListener('click', () => { teacher.nameEdit = email; renderTeacherPanel(); });
     } else {
@@ -1406,12 +1453,16 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
           <input type="text" id="target-student-name" class="input" maxlength="60" autocomplete="off" placeholder="Ім'я учня" style="margin-bottom:0; flex:1; min-width:0;">
           <button type="button" class="btn" id="btnSaveName" style="flex-shrink:0;">Зберегти ім'я</button>
         </div>
+        <div id="tLangHint" style="font-size:var(--fs-small);color:var(--text-muted);margin:-4px 0 10px;"></div>
         <textarea id="json-code" class="teacher-textarea" placeholder="Вставте JSON масив слів..."></textarea>
         <button type="button" class="btn btn-primary" id="btnSendWords" style="width:100%;">Відправити слова</button>
       </section>`;
     // Знайома пошта підставляє збережене ім'я — не треба шукати його в переписці
     view.querySelector('#target-student-email').addEventListener('change', e => {
-      const known = teacher.names[String(e.target.value || '').trim().toLowerCase()];
+      const em = String(e.target.value || '').trim().toLowerCase();
+      const hint = view.querySelector('#tLangHint');
+      if (hint) hint.textContent = em && teacherLangOf(em) === 'ru' ? 'Учень російськомовний: беріть промпт з російським перекладом (поле uk). Переклад має бути російською.' : '';
+      const known = teacher.names[em];
       const nameEl = view.querySelector('#target-student-name');
       if (known && nameEl && !nameEl.value.trim()) nameEl.value = known;
     });
@@ -1565,6 +1616,7 @@ svg.icon { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.8; f
     loadPendingProgress();
     await flushPendingProgress();
     try { await loadStudentProfile(); } catch (e) { console.warn('[teacher-learn]', e); }
+    applyLang();
     await loadStudyDays();
     await loadIrregular();
     await loadStudentWords();
